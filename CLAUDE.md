@@ -117,7 +117,7 @@ ollama list
 
 ## What Has NOT Been Built Yet (Next Steps in Order)
 
-- [ ] Chainlit UI layer (replace terminal runner with web chat interface)
+- [x] Chainlit UI layer (app.py — web chat interface)
 - [ ] Live end-to-end test (first real deliberation session)
 - [ ] core/tools/ (tools agents can call — placeholder currently)
 - [ ] Worker agent tier (subordinate to C-suite, executes tasks)
@@ -128,13 +128,8 @@ ollama list
 
 ## Current Next Step
 
-Build the Chainlit UI layer in `app.py` at the project root.
-It should replace `core/graph/runner.py` as the primary interaction surface,
-wrapping the same graph logic with a web chat interface that:
-- Shows each agent's output as it arrives (streaming feel)
-- Formats the deliberation report with clear visual structure
-- Handles the human interrupt as a chat input
-- Lets the user select a company at startup
+Run a live end-to-end test — first real deliberation session through
+the Chainlit UI (`chainlit run app.py`) to validate the full pipeline.
 
 ---
 

@@ -231,7 +231,10 @@ Flags security and reliability concerns every time, even if the room is comforta
 ```
 D:\csuite\
 │
+├── app.py                          ← Chainlit web UI entry point
+│
 ├── core\
+│   ├── config.py                   ← Centralised path config (env vars)
 │   ├── state.py                    ← LangGraph CompanyState TypedDict
 │   │
 │   ├── agents\
@@ -248,7 +251,7 @@ D:\csuite\
 │   │   ├── session_graph.py        ← Builds and compiles the LangGraph graph
 │   │   ├── nodes.py                ← All node functions (task_intake, deliberation, etc.)
 │   │   ├── edges.py                ← conflict_router conditional edge
-│   │   └── runner.py               ← CLI entry point for running a session
+│   │   └── runner.py               ← CLI entry point (legacy — use app.py instead)
 │   │
 │   ├── memory\
 │   │   ├── __init__.py
@@ -376,11 +379,32 @@ constraints, risk profile, escalation rules, and agent personalities.
 
 ## Running a Session
 
+### Web UI (Chainlit) — recommended
+
 ```powershell
 # Activate the virtual environment first
 E:\venvs\csuite\Scripts\Activate.ps1
 
-# Run a session
+cd D:\csuite
+chainlit run app.py
+```
+
+This opens a web interface at `http://localhost:8000`. The flow:
+
+1. **Select a company** from the list of configured companies
+2. **Type a task** — the question or decision for the C-suite to deliberate on
+3. **Watch deliberation** — each agent's output appears as a separate message,
+   with phase headers separating rounds and cross-responses
+4. **Respond** — approve, override with your reasoning, or ask for more info
+5. **Memory write** — your decision is stored, and you can submit another task
+
+### CLI (legacy)
+
+The original terminal runner still works if you prefer:
+
+```powershell
+E:\venvs\csuite\Scripts\Activate.ps1
+
 cd D:\csuite
 python -m core.graph.runner --company acme_corp --task "Should we raise our prices by 10%?"
 
@@ -389,38 +413,6 @@ python -m core.graph.runner `
     --company acme_corp `
     --task "Should we raise our prices by 10%?" `
     --context "Q3 revenue missed target by 8%. Churn rate is 4.2%, above our 3% goal."
-```
-
-**What you'll see:**
-
-```
-  Company: Acme Corp  |  Task: Should we raise our prices by 10%?
-
-  Starting deliberation...
-
-  14:32:01  [CFO] MODIFY (78% confidence)
-  14:32:18  [COO] PROCEED (65% confidence)
-  14:32:31  [CMO] BLOCK (82% confidence)
-  14:32:44  [CTO] PROCEED (71% confidence)
-  14:32:44  Round 1 deliberation complete.
-  14:32:58  [CFO cross-response] MODIFY
-  14:33:11  [COO cross-response] MODIFY
-  14:33:24  [CMO cross-response] BLOCK
-  14:33:37  [CTO cross-response] PROCEED
-  14:33:37  Round 1 cross-response complete.
-  14:33:52  [CEO] CONFLICT DETECTED
-
-  [loops back — Round 2 with CEO conflict framing]
-
-  ...
-
-  [Full deliberation report printed here]
-
-======================================================================
-  YOUR RESPONSE:
-  Options: approve | override <reason> | more info <question>
-======================================================================
-  >
 ```
 
 ---
@@ -489,8 +481,9 @@ in the system — it encodes your actual judgment, not the agents' defaults.
 
 The foundation is complete. Planned additions in order:
 
-1. **Chainlit UI** — web-based chat interface to replace the terminal runner
-2. **Worker agent tier** — agents subordinate to the C-suite that execute
+1. ~~**Chainlit UI**~~ — **done** (`app.py`)
+2. **Live end-to-end test** — first real deliberation session through the UI
+3. **Worker agent tier** — agents subordinate to the C-suite that execute
    tasks (research, drafting, analysis) rather than deliberating on strategy
 3. **Knowledge ingestion** — a pipeline to load company documents, market
    data, and competitor information into the semantic memory store
