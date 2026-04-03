@@ -119,10 +119,18 @@ ollama list
 
 - [x] Chainlit UI layer (app.py — web chat interface)
 - [ ] Live end-to-end test (first real deliberation session)
-- [ ] core/tools/ (tools agents can call — placeholder currently)
-- [ ] Worker agent tier (subordinate to C-suite, executes tasks)
+- [ ] Per-agent streaming in UI (break round nodes into individual agent nodes)
+- [ ] Task context input in UI (--context equivalent)
+- [ ] Dynamic escalation thresholds (tie to FCF / financial data)
+- [ ] Financial data integration (financials table in SQLite, agent-queryable)
 - [ ] Knowledge ingestion pipeline (load docs into semantic memory)
+- [ ] Worker agent tier (subordinate to C-suite, executes tasks)
 - [ ] Multi-task agenda handling (queue of tasks in one session)
+- [ ] Agent memory review / decision audit trail
+- [ ] Multi-company dashboard
+- [ ] Agent personality tuning from override feedback
+- [ ] Scheduled sessions with auto-generated agendas
+- [ ] External data hooks (live APIs during deliberation)
 
 ---
 

@@ -481,13 +481,52 @@ in the system — it encodes your actual judgment, not the agents' defaults.
 
 The foundation is complete. Planned additions in order:
 
+### Near-term
+
 1. ~~**Chainlit UI**~~ — **done** (`app.py`)
 2. **Live end-to-end test** — first real deliberation session through the UI
-3. **Worker agent tier** — agents subordinate to the C-suite that execute
+3. **Per-agent streaming in UI** — break deliberation nodes into individual
+   agent nodes so the UI shows each agent's output the moment it finishes,
+   not after the whole round completes
+4. **Task context input in UI** — let users provide background context
+   alongside the task (the CLI `--context` flag has no UI equivalent yet)
+
+### Medium-term
+
+5. **Dynamic escalation thresholds** — tie spend-based escalation rules to
+   actual financial data (e.g. "escalate if proposed spend exceeds 10% of
+   trailing monthly free cash flow") instead of a static dollar amount.
+   Requires a financials data source — see Financial Data Integration below.
+6. **Financial data integration** — add a `financials` table to the per-company
+   SQLite database (cash on hand, monthly revenue, monthly expenses, FCF).
+   Agents can query this during deliberation for data-grounded recommendations.
+   Could be updated manually, via CSV import, or eventually via accounting
+   API integration (QuickBooks, Wave, etc.)
+7. **Knowledge ingestion pipeline** — load company documents, market data,
+   and competitor information into the semantic memory store so agents have
+   real context beyond what's in the task prompt
+8. **Worker agent tier** — agents subordinate to the C-suite that execute
    tasks (research, drafting, analysis) rather than deliberating on strategy
-3. **Knowledge ingestion** — a pipeline to load company documents, market
-   data, and competitor information into the semantic memory store
-4. **Multi-session agenda** — handle a queue of tasks in one session rather
+9. **Multi-task agenda** — handle a queue of tasks in one session rather
    than one task per session
-5. **Agent memory review** — a tool to inspect what the system has learned
-   about your decision-making patterns over time
+
+### Longer-term
+
+10. **Agent memory review** — a tool/dashboard to inspect what the system has
+    learned about your decision-making patterns over time (which agents you
+    agree with most, how often you override, recurring themes in overrides)
+11. **Decision audit trail** — exportable history of all decisions, agent
+    reasoning, and human overrides for a company, useful for retrospectives
+    or onboarding a co-founder/partner into the system
+12. **Multi-company dashboard** — a view across all company instances showing
+    recent decisions, pending escalations, and session summaries
+13. **Agent personality tuning from feedback** — automatically adjust agent
+    personality prompts based on accumulated human override data (e.g. if
+    you consistently override the CFO's conservative blocks, nudge its
+    risk calibration)
+14. **Scheduled sessions** — recurring deliberation sessions triggered on a
+    schedule (e.g. weekly strategy review) with auto-generated agenda items
+    pulled from company knowledge and recent decisions
+15. **External data hooks** — let agents pull live data during deliberation
+    (market data APIs, analytics dashboards, CRM stats) rather than relying
+    only on what's in the prompt or memory

@@ -16,6 +16,10 @@ After running this script:
 import argparse
 import json
 import sqlite3
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core.config import COMPANY_ROOT, DATA_ROOT, LOG_ROOT
 
