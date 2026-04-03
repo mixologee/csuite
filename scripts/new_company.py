@@ -9,18 +9,15 @@ Usage:
     python scripts/new_company.py --id widget_co  (uses defaults, edit config.json after)
 
 After running this script:
-    1. Edit D:/csuite/companies/<id>/config.json to fill in company details
+    1. Edit CSUITE_COMPANY_ROOT/<id>/config.json to fill in company details
     2. Run a test session: python -m core.graph.runner --company <id> --task "Hello"
 """
 
 import argparse
 import json
 import sqlite3
-from pathlib import Path
 
-COMPANY_ROOT = Path("D:/csuite/companies")
-DATA_ROOT    = Path("G:/csuite_data")
-LOG_ROOT     = Path("F:/csuite_logs")
+from core.config import COMPANY_ROOT, DATA_ROOT, LOG_ROOT
 
 
 def scaffold_company(company_id: str, company_name: str, industry: str) -> None:

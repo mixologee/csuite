@@ -109,13 +109,13 @@ knowledge    — freeform company knowledge (manually added or agent-discovered)
 ```
 
 ### 3. Semantic Memory
-**What:** ChromaDB vector store — one store per company on SSD (`D:/csuite/companies/`)  
+**What:** ChromaDB vector store — one store per company (`CSUITE_COMPANY_ROOT/<id>/chroma/`)  
 **Lifespan:** Permanent — grows over time  
 **Contains:** Embedded decision reasoning (searchable by meaning)  
 **Purpose:** "Have we faced something like this before?" — retrieved at session start  
 
 ### 4. Company DNA
-**What:** `config.json` — one file per company on SSD  
+**What:** `config.json` — one file per company (`CSUITE_COMPANY_ROOT/<id>/config.json`)  
 **Lifespan:** Permanent — changes only when you explicitly update it  
 **Contains:** Mission, goals, constraints, risk profile, escalation rules, agent personalities  
 **Purpose:** The company's identity — injected into every agent's system prompt  
@@ -258,9 +258,8 @@ D:\csuite\
 │   └── tools\
 │       └── __init__.py             ← Placeholder for future worker agent tools
 │
-├── companies\
-│   └── example_company\
-│       └── config.json             ← Company DNA template
+├── templates\
+│   └── example_config.json         ← Company DNA template (copy when creating)
 │
 ├── scripts\
 │   └── new_company.py              ← Scaffold a new company instance
@@ -272,11 +271,16 @@ D:\csuite\
 D:\models\ollama\                   ← Ollama model cache (set via OLLAMA_MODELS env var)
 E:\venvs\csuite\                    ← Python virtual environment
 
-G:\csuite_data\                     ← Company SQLite databases (HDD — sequential writes)
+G:\csuite_data\                     ← CSUITE_DATA_ROOT — SQLite databases (HDD)
 │   └── <company_id>\
 │       └── <company_id>.db
+│
+G:\csuite_data\companies\           ← CSUITE_COMPANY_ROOT — configs + ChromaDB
+│   └── <company_id>\
+│       ├── config.json
+│       └── chroma\
 
-F:\csuite_logs\                     ← Session logs (HDD)
+F:\csuite_logs\                     ← CSUITE_LOG_ROOT — Session logs (HDD)
 │   └── <company_id>\sessions\
 ```
 
@@ -338,6 +342,18 @@ pip install -r requirements.txt
 
 **6. Clone this repository to D:\csuite\**
 
+**7. Set data path environment variables**
+```powershell
+# System Properties → Advanced → Environment Variables
+# These control where company data is stored (outside the repo)
+#
+# Variable: CSUITE_COMPANY_ROOT   Value: G:\csuite_data\companies
+# Variable: CSUITE_DATA_ROOT      Value: G:\csuite_data
+# Variable: CSUITE_LOG_ROOT       Value: F:\csuite_logs
+#
+# All three have sensible defaults — see core/config.py
+```
+
 ---
 
 ## Creating a Company
@@ -348,10 +364,10 @@ python scripts/new_company.py --id acme_corp --name "Acme Corp" --industry "B2B 
 ```
 
 This creates:
-- `D:\csuite\companies\acme_corp\config.json` — edit this to define the company
-- `D:\csuite\companies\acme_corp\chroma\` — ChromaDB vector store (starts empty)
-- `G:\csuite_data\acme_corp\acme_corp.db` — SQLite database with schema initialized
-- `F:\csuite_logs\acme_corp\sessions\` — log directory
+- `CSUITE_COMPANY_ROOT/acme_corp/config.json` — edit this to define the company
+- `CSUITE_COMPANY_ROOT/acme_corp/chroma/` — ChromaDB vector store (starts empty)
+- `CSUITE_DATA_ROOT/acme_corp/acme_corp.db` — SQLite database with schema initialized
+- `CSUITE_LOG_ROOT/acme_corp/sessions/` — log directory
 
 **Then edit `config.json`** to set the company's mission, strategic priorities,
 constraints, risk profile, escalation rules, and agent personalities.

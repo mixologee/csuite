@@ -17,17 +17,16 @@ import json
 import sqlite3
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 
 import chromadb
 from langchain_ollama import OllamaEmbeddings
+
+from core.config import COMPANY_ROOT, DATA_ROOT
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
 EMBED_MODEL = "nomic-embed-text"
 OLLAMA_BASE = "http://localhost:11434"
-DATA_ROOT   = Path("G:/csuite_data")
-SSD_ROOT    = Path("D:/csuite/companies")
 
 # ── Public interface ──────────────────────────────────────────────────────────
 
@@ -247,7 +246,7 @@ def _embed_decisions(state: dict, company_id: str) -> None:
 
     Errors here are non-fatal. SQLite is the source of truth.
     """
-    chroma_path = SSD_ROOT / company_id / "chroma"
+    chroma_path = COMPANY_ROOT / company_id / "chroma"
     chroma_path.mkdir(parents=True, exist_ok=True)
 
     decisions    = state.get("decisions_made", [])

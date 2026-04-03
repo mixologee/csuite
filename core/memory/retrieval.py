@@ -15,7 +15,6 @@ prevents context window bloat on the worker tier.
 """
 
 import sqlite3
-from pathlib import Path
 
 import chromadb
 from langchain_ollama import OllamaEmbeddings
@@ -26,8 +25,7 @@ EMBED_MODEL   = "nomic-embed-text"
 OLLAMA_BASE   = "http://localhost:11434"
 TOP_K_SEMANTIC = 5    # number of semantically similar decisions to retrieve
 RECENT_SESSIONS = 3   # number of recent sessions to surface for recency context
-DATA_ROOT     = Path("G:/csuite_data")
-SSD_ROOT      = Path("D:/csuite/companies")
+from core.config import COMPANY_ROOT, DATA_ROOT
 
 # ── Public interface ──────────────────────────────────────────────────────────
 
@@ -72,7 +70,7 @@ def _semantic_search(company_id: str, query: str, top_k: int) -> list[dict]:
     Embeds the query and retrieves the most semantically similar
     past decisions from this company's ChromaDB store.
     """
-    chroma_path = SSD_ROOT / company_id / "chroma"
+    chroma_path = COMPANY_ROOT / company_id / "chroma"
     if not chroma_path.exists():
         return []
 

@@ -61,9 +61,14 @@ to the human owner (the user). The human is always the final decision-maker.
 D:\csuite\           ← project root (this repo) — SSD
 D:\models\           ← model cache (set via OLLAMA_MODELS env var) — SSD
 E:\venvs\csuite\     ← Python virtual environment — SSD
-F:\csuite_logs\      ← session logs — HDD
-G:\csuite_data\      ← company SQLite databases — HDD
+F:\csuite_logs\      ← session logs — HDD  (CSUITE_LOG_ROOT)
+G:\csuite_data\      ← company SQLite databases — HDD  (CSUITE_DATA_ROOT)
+G:\csuite_data\companies\ ← company configs + ChromaDB  (CSUITE_COMPANY_ROOT)
 ```
+
+All external data paths are configured via environment variables in
+`core/config.py`. Set `CSUITE_COMPANY_ROOT`, `CSUITE_DATA_ROOT`, and
+`CSUITE_LOG_ROOT` to override the defaults above.
 
 ---
 
@@ -107,7 +112,8 @@ ollama list
 - [x] core/memory/retrieval.py    — ChromaDB semantic search + SQLite queries
 - [x] core/memory/writer.py       — SQLite write + ChromaDB embed
 - [x] scripts/new_company.py      — Company scaffolding script
-- [x] companies/example_company/config.json — Example DNA config
+- [x] templates/example_config.json — Example DNA config template
+- [x] core/config.py              — Centralised path config (env vars)
 
 ## What Has NOT Been Built Yet (Next Steps in Order)
 
@@ -138,8 +144,8 @@ wrapping the same graph logic with a web chat interface that:
 |---|---|---|---|
 | Working | LangGraph state (RAM) | In-process | Session only |
 | Episodic | SQLite | G:\csuite_data\ | Permanent |
-| Semantic | ChromaDB | D:\csuite\companies\<id>\chroma\ | Permanent |
-| DNA | JSON config | D:\csuite\companies\<id>\config.json | Until edited |
+| Semantic | ChromaDB | CSUITE_COMPANY_ROOT\<id>\chroma\ | Permanent |
+| DNA | JSON config | CSUITE_COMPANY_ROOT\<id>\config.json | Until edited |
 
 ---
 

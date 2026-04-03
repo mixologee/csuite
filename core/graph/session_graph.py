@@ -10,8 +10,6 @@ company's SQLite database, which means:
   - Full state history is persisted automatically by LangGraph
 """
 
-from pathlib import Path
-
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.sqlite import SqliteSaver
 
@@ -26,9 +24,8 @@ from core.graph.nodes import (
     human_interrupt_node,
     memory_write,
 )
+from core.config import DATA_ROOT
 from core.graph.edges import conflict_router
-
-DATA_ROOT = Path("G:/csuite_data")
 
 
 def build_session_graph(company_id: str):

@@ -8,7 +8,7 @@ Usage:
     python -m core.graph.runner --company acme_corp --task "..." --context "Q3 revenue down 8%"
 
 What this does:
-    1. Loads company DNA from D:/csuite/companies/<company_id>/config.json
+    1. Loads company DNA from CSUITE_COMPANY_ROOT/<company_id>/config.json
     2. Builds the compiled LangGraph graph for this company
     3. Streams the graph to the human_interrupt pause point
     4. Displays the full deliberation report
@@ -19,11 +19,9 @@ What this does:
 import argparse
 import json
 import sys
-from pathlib import Path
 
+from core.config import COMPANY_ROOT
 from core.graph.session_graph import build_session_graph
-
-COMPANY_ROOT = Path("D:/csuite/companies")
 
 
 def run_session(company_id: str, task: str, context: str = "") -> None:
@@ -104,7 +102,7 @@ def _parse_args():
     )
     parser.add_argument(
         "--company", required=True,
-        help="Company ID (must match a folder in D:/csuite/companies/)"
+        help="Company ID (must match a folder under CSUITE_COMPANY_ROOT)"
     )
     parser.add_argument(
         "--task", required=True,
