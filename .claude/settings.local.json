@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir -p D:/csuite/templates)",
+      "Bash(cp D:/csuite/companies/example_company/config.json D:/csuite/templates/example_config.json)"
+    ]
+  }
+}
