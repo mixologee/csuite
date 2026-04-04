@@ -4,6 +4,10 @@ core/agents/base.py
 Base class for all C-suite agents. Handles LLM communication,
 hybrid JSON/natural-language response parsing, and retry logic.
 
+Supports two model providers configured per-company in config.json:
+  - "ollama"    → langchain-ollama (local inference, default)
+  - "anthropic" → langchain-anthropic (Claude API)
+
 Output format used by all agents:
 {
     "analysis":       "<free-form natural language — as long as needed>",
@@ -23,14 +27,13 @@ import time
 from abc import ABC, abstractmethod
 from typing import Any
 
-from langchain_ollama import OllamaLLM
-
 # ── Constants ────────────────────────────────────────────────────────────────
 
-MODEL_NAME    = "qwen2.5:32b-instruct-q4_K_M"
-OLLAMA_BASE   = "http://localhost:11434"
-MAX_RETRIES   = 3
-RETRY_DELAY   = 2.0  # seconds between retries
+DEFAULT_OLLAMA_MODEL    = "gpt-oss:20b"
+DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-6"
+OLLAMA_BASE             = "http://localhost:11434"
+MAX_RETRIES             = 3
+RETRY_DELAY             = 2.0  # seconds between retries
 
 VALID_RECOMMENDATIONS = {"proceed", "block", "modify"}
 
@@ -60,6 +63,48 @@ Rules:
 """
 
 
+# ── LLM factory ─────────────────────────────────────────────────────────────
+
+def build_llm(company_config: dict, temperature: float = 0.7, max_tokens: int = 2048):
+    """
+    Build the appropriate LLM instance based on company config.
+
+    Config fields:
+        model_provider  — "ollama" (default) or "anthropic"
+        model_name      — override the default model for the chosen provider
+    """
+    provider   = company_config.get("model_provider", "ollama").lower()
+    model_name = company_config.get("model_name", "")
+
+    if provider == "anthropic":
+        from langchain_anthropic import ChatAnthropic
+        return ChatAnthropic(
+            model_name  = model_name or DEFAULT_ANTHROPIC_MODEL,
+            temperature = temperature,
+            max_tokens  = max_tokens,
+        )
+    else:
+        from langchain_ollama import OllamaLLM
+        return OllamaLLM(
+            model       = model_name or DEFAULT_OLLAMA_MODEL,
+            base_url    = OLLAMA_BASE,
+            temperature = temperature,
+            num_predict = max_tokens,
+        )
+
+
+def invoke_llm(llm, prompt: str) -> str:
+    """
+    Invoke the LLM and return the response as a plain string.
+    Handles the difference between OllamaLLM (returns str) and
+    ChatAnthropic (returns AIMessage).
+    """
+    result = llm.invoke(prompt)
+    if hasattr(result, "content"):
+        return result.content
+    return str(result)
+
+
 class BaseAgent(ABC):
     """
     Abstract base for all C-suite agents.
@@ -76,12 +121,7 @@ class BaseAgent(ABC):
     def __init__(self, company_config: dict):
         self.config  = company_config
         self.company = company_config.get("company_name", "the company")
-        self.llm     = OllamaLLM(
-            model       = MODEL_NAME,
-            base_url    = OLLAMA_BASE,
-            temperature = 0.7,
-            num_predict = 2048,
-        )
+        self.llm     = build_llm(company_config, temperature=0.7, max_tokens=2048)
         self.system_prompt = self._build_system_prompt(company_config)
 
     # ── Abstract interface ───────────────────────────────────────────────────
@@ -136,7 +176,7 @@ class BaseAgent(ABC):
     def _wrap_prompt(self, instruction: str) -> str:
         """
         Combines system prompt, instruction, and response schema
-        into a single prompt string for Ollama.
+        into a single prompt string.
         """
         return (
             f"{self.system_prompt}\n\n"
@@ -157,7 +197,7 @@ class BaseAgent(ABC):
         for attempt in range(1, MAX_RETRIES + 1):
             try:
                 if attempt == 1:
-                    raw = self.llm.invoke(prompt)
+                    raw = invoke_llm(self.llm, prompt)
                 else:
                     # Ask the model to fix its previous output
                     fix_prompt = (
@@ -167,7 +207,7 @@ class BaseAgent(ABC):
                         f"Please rewrite it as a valid JSON object following this schema:\n"
                         f"{RESPONSE_SCHEMA}"
                     )
-                    raw = self.llm.invoke(fix_prompt)
+                    raw = invoke_llm(self.llm, fix_prompt)
 
                 return self._parse_response(raw)
 

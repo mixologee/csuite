@@ -32,9 +32,7 @@ import re
 import time
 from typing import Optional
 
-from langchain_ollama import OllamaLLM
-
-from core.agents.base import MODEL_NAME, OLLAMA_BASE, MAX_RETRIES, RETRY_DELAY
+from core.agents.base import build_llm, invoke_llm, MAX_RETRIES, RETRY_DELAY
 
 # ── CEO response schema ───────────────────────────────────────────────────────
 
@@ -55,10 +53,14 @@ outside the JSON. Use this exact schema:
 Rules:
 - synthesis: Write your complete read of the room. Name which executives agree,
   which disagree, and where the core tension lies. Be specific.
-- consensus: true only if you can articulate a clear path forward that the
-  C-suite's positions are compatible with. false if genuine conflict remains.
-- conflicts: Empty list [] only if consensus is true. Otherwise list each
-  unresolved tension with the specific executives involved.
+- consensus: true when executives agree on the general direction, even if they
+  differ on details, conditions, or emphasis. "Proceed with caution" and
+  "proceed if budget allows" are consensus — the direction is the same.
+  Only set false when executives have genuinely incompatible positions
+  (e.g. one says proceed and another says block for irreconcilable reasons).
+  Differences in framing, emphasis, or suggested conditions are NOT conflict.
+- conflicts: Empty list [] when consensus is true. When false, list only
+  genuinely irreconcilable tensions — not minor differences in emphasis.
 - recommendation: "escalate" when consensus is false after round 2, or when the
   decision falls under the company's escalation rules regardless of consensus.
 - escalate: true whenever recommendation is "escalate" OR when the decision
@@ -79,11 +81,10 @@ class CEOAgent:
     def __init__(self, company_config: dict):
         self.config  = company_config
         self.company = company_config.get("company_name", "the company")
-        self.llm     = OllamaLLM(
-            model       = MODEL_NAME,
-            base_url    = OLLAMA_BASE,
+        self.llm     = build_llm(
+            company_config,
             temperature = 0.6,   # slightly lower than agents — CEO is more deliberate
-            num_predict = 3072,  # CEO synthesis is longer than agent outputs
+            max_tokens  = 3072,  # CEO synthesis is longer than agent outputs
         )
         self.system_prompt = self._build_system_prompt(company_config)
 
@@ -249,7 +250,7 @@ class CEOAgent:
         last_raw = ""
         for attempt in range(1, MAX_RETRIES + 1):
             try:
-                raw = self.llm.invoke(prompt)
+                raw = invoke_llm(self.llm, prompt)
                 # Quick sanity check — if it parses, return immediately
                 self._parse_ceo_response(raw)
                 return raw

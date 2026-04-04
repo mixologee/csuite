@@ -20,6 +20,9 @@ import argparse
 import json
 import sys
 
+from dotenv import load_dotenv
+load_dotenv()
+
 from core.config import COMPANY_ROOT
 from core.graph.session_graph import build_session_graph
 

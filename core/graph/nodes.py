@@ -286,6 +286,15 @@ def _build_agent_briefing(
         )
         parts.append(f"Relevant past decisions:\n{mem_text}")
 
+    # Surface any prior owner decisions from this session so agents
+    # do not re-litigate points the owner has already settled.
+    owner_directions = _extract_owner_directions(state)
+    if owner_directions:
+        parts.append(
+            "OWNER DIRECTIONS (treat these as settled — do not re-litigate):\n"
+            + "\n".join(f"- {d}" for d in owner_directions)
+        )
+
     if include_prior_outputs and state.get("agent_outputs"):
         outputs_text = "\n\n".join(
             f"{o['agent'].upper()}:\n{o['analysis']}\n"
@@ -305,6 +314,21 @@ def _build_agent_briefing(
         )
 
     return "\n\n".join(parts)
+
+
+def _extract_owner_directions(state: dict) -> list[str]:
+    """
+    Pull any human decisions or 'more info' context from the session's
+    message history. These represent settled points the owner has already
+    weighed in on — agents should incorporate them, not argue against them.
+    """
+    directions = []
+    for msg in state.get("messages", []):
+        if msg.get("role") == "user":
+            content = msg.get("content", "").strip()
+            if content:
+                directions.append(content)
+    return directions
 
 
 def _log(msg: str) -> None:

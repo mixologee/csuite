@@ -19,6 +19,9 @@ Flow:
 import asyncio
 import json
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import chainlit as cl
 
 from core.config import COMPANY_ROOT
