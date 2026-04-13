@@ -74,63 +74,179 @@ def memory_retrieval(state: dict) -> dict:
 
 def prior_decision_check(state: dict) -> dict:
     """
-    Checks if a closely matching prior decision exists in retrieved memories.
-    If so, the CEO summarizes the prior decision and skips deliberation.
-    If not, passes through with no state changes (deliberation proceeds).
+    Checks whether the current task is asking about something already decided,
+    or is essentially a repeat of a prior decision.
 
-    A match is determined by high semantic similarity (>= 0.85) from
-    ChromaDB, meaning the current task is essentially the same question
-    that was already decided.
+    Uses two strategies:
+        1. SQLite keyword search — looks for prior decisions with overlapping
+           keywords in the task text
+        2. ChromaDB similarity (if available) — high cosine similarity match
+
+    If a match is found, the CEO answers from the knowledge document and
+    prior decision record, skipping full deliberation.
     """
-    SIMILARITY_THRESHOLD = 0.85
+    import sqlite3
+    from core.config import DATA_ROOT
+
+    task = state.get("current_task", "").strip()
+    company_id = state.get("company_id", "")
     memories = state.get("relevant_memories", [])
-    task = state.get("current_task", "")
 
-    # Find the best semantic match
-    best_match = None
-    for m in memories:
-        score = m.get("similarity_score")
-        if score is not None and score >= SIMILARITY_THRESHOLD:
-            if best_match is None or score > best_match.get("similarity_score", 0):
-                best_match = m
-
-    if not best_match:
-        # No close match — proceed to deliberation
+    if not task or not company_id:
         return {"prior_decision_found": False}
 
-    _log(f"[MEMORY] Prior decision found (similarity: "
-         f"{best_match['similarity_score']:.0%}) — skipping deliberation.")
-
-    # Build a synthesis from the prior decision
-    prior_task = best_match.get("task", "")
-    prior_outcome = best_match.get("outcome", "")
-    prior_reasoning = best_match.get("reasoning", "")
-    prior_override = best_match.get("human_override", "")
-
-    synthesis_parts = [
-        f"This topic has already been decided in a prior session.",
-        f"",
-        f"**Prior task:** {prior_task}",
-        f"**Decision:** {prior_outcome}",
+    # ── Strategy 1: check if this is a question about past decisions ─────
+    question_patterns = [
+        "what did we decide", "where do we stand", "what was decided",
+        "what happened with", "status of", "update on", "did we",
+        "have we decided", "what's the decision on", "recap",
     ]
-    if prior_reasoning:
-        synthesis_parts.append(f"**Reasoning:** {prior_reasoning}")
-    if prior_override:
-        synthesis_parts.append(f"**Owner directive:** {prior_override}")
-    synthesis_parts.append(
-        f"\nIf circumstances have changed, provide new information "
-        f"via 'more info' to trigger a fresh deliberation."
-    )
+    is_status_question = any(p in task.lower() for p in question_patterns)
 
-    synthesis = "\n".join(synthesis_parts)
+    # ── Strategy 2: SQLite keyword match for prior decisions ─────────────
+    best_match = _find_matching_decision(company_id, task)
 
-    return {
-        "prior_decision_found": True,
-        "ceo_synthesis":        synthesis,
-        "consensus_reached":    True,
-        "escalate_to_human":    False,
-        "messages": [{"role": "assistant", "content": synthesis}],
+    # ── Strategy 3: ChromaDB similarity (fallback if available) ──────────
+    if not best_match:
+        for m in memories:
+            score = m.get("similarity_score")
+            if score is not None and score >= 0.85:
+                if best_match is None or score > best_match.get("similarity_score", 0):
+                    best_match = m
+
+    # ── Decide: skip deliberation or proceed ─────────────────────────────
+    if not best_match and not is_status_question:
+        return {"prior_decision_found": False}
+
+    # If it's a status question and we have a knowledge doc, let the CEO
+    # answer from the full knowledge document rather than a single match
+    knowledge_doc = ""
+    for m in memories:
+        if m.get("source") == "distilled_knowledge":
+            knowledge_doc = m.get("reasoning", "")
+            break
+
+    if is_status_question and knowledge_doc:
+        _log("[MEMORY] Status question detected — CEO answering from knowledge document.")
+
+        # Ask the CEO to answer the question from the knowledge doc
+        ceo = CEOAgent(state["company_config"])
+        prompt = (
+            f"The owner is asking: \"{task}\"\n\n"
+            f"Answer this question using ONLY the institutional knowledge below. "
+            f"Be specific about what was decided, when, and why. If the topic "
+            f"hasn't been decided yet, say so clearly.\n\n"
+            f"INSTITUTIONAL KNOWLEDGE:\n{knowledge_doc}"
+        )
+        from core.agents.base import invoke_llm
+        synthesis = invoke_llm(ceo.llm, prompt)
+
+        return {
+            "prior_decision_found": True,
+            "ceo_synthesis":        synthesis,
+            "consensus_reached":    True,
+            "escalate_to_human":    False,
+            "messages": [{"role": "assistant", "content": synthesis}],
+        }
+
+    if best_match:
+        _log(f"[MEMORY] Prior decision found — skipping deliberation.")
+
+        prior_task = best_match.get("task", "")
+        prior_outcome = best_match.get("outcome", "")
+        prior_reasoning = best_match.get("reasoning", "")
+        prior_override = best_match.get("human_override", "")
+
+        synthesis_parts = [
+            "This topic has already been decided in a prior session.",
+            "",
+            f"**Prior task:** {prior_task}",
+            f"**Decision:** {prior_outcome}",
+        ]
+        if prior_reasoning:
+            synthesis_parts.append(f"**Reasoning:** {prior_reasoning}")
+        if prior_override:
+            synthesis_parts.append(f"**Owner directive:** {prior_override}")
+        synthesis_parts.append(
+            "\nIf circumstances have changed, provide new information "
+            "via 'more info' to trigger a fresh deliberation."
+        )
+
+        return {
+            "prior_decision_found": True,
+            "ceo_synthesis":        "\n".join(synthesis_parts),
+            "consensus_reached":    True,
+            "escalate_to_human":    False,
+            "messages": [{"role": "assistant", "content": "\n".join(synthesis_parts)}],
+        }
+
+    return {"prior_decision_found": False}
+
+
+def _find_matching_decision(company_id: str, task: str) -> dict | None:
+    """
+    Search SQLite for a prior decision whose task text shares significant
+    keywords with the current task. Returns the best match or None.
+    """
+    import sqlite3
+    from core.config import DATA_ROOT
+
+    db_path = DATA_ROOT / company_id / f"{company_id}.db"
+    if not db_path.exists():
+        return None
+
+    # Extract meaningful words from the task (skip short/common words)
+    stop_words = {
+        "the", "a", "an", "is", "are", "was", "were", "we", "our", "us",
+        "did", "do", "does", "what", "where", "how", "when", "about",
+        "with", "for", "and", "or", "but", "not", "this", "that", "on",
+        "in", "to", "of", "it", "its", "has", "have", "had", "can",
+        "should", "would", "could", "will", "been", "being", "from",
     }
+    words = [
+        w.lower().strip("?.,!\"'")
+        for w in task.split()
+        if len(w) > 2 and w.lower().strip("?.,!\"'") not in stop_words
+    ]
+
+    if not words:
+        return None
+
+    try:
+        with sqlite3.connect(str(db_path)) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """
+                SELECT task, outcome, reasoning, human_override, decided_at
+                FROM decisions
+                WHERE outcome IS NOT NULL
+                ORDER BY decided_at DESC
+                """,
+            ).fetchall()
+
+        best = None
+        best_score = 0
+
+        for row in rows:
+            prior_task = (row["task"] or "").lower()
+            matches = sum(1 for w in words if w in prior_task)
+            score = matches / len(words) if words else 0
+
+            if score > best_score and score >= 0.4:
+                best_score = score
+                best = {
+                    "task":           row["task"],
+                    "outcome":        row["outcome"],
+                    "reasoning":      row["reasoning"] or "",
+                    "human_override": row["human_override"] or "",
+                    "source":         "sqlite_keyword_match",
+                    "similarity_score": None,
+                }
+
+        return best
+
+    except Exception:
+        return None
 
 
 # ── Deliberation nodes ────────────────────────────────────────────────────────
@@ -308,18 +424,16 @@ def reconsider_with_info(state: dict) -> dict:
 
 def spawn_workers(state: dict) -> dict:
     """
-    After human approval, dispatches matching worker agents to execute
-    concrete tasks (coding, comms, research, etc.).
+    After human approval, identifies and dispatches matching worker agents.
 
     Gates:
-        - human_decision must start with 'implement' (not 'approve' —
-          approve finalizes without execution, implement triggers workers)
+        - human_decision must start with 'implement'
         - Each worker's keywords must match the task/synthesis text
-        - Workers may have additional requirements (e.g. CCA needs
-          codebase_path) — if those fail, that worker is skipped
-          with a log warning, not a crash
 
-    Workers run sequentially. Results accumulate in worker_results.
+    Non-interactive workers execute inline and their results go to
+    worker_results. Interactive workers (like CCA) are flagged as
+    pending — the UI layer handles their multi-turn sessions after
+    the graph completes.
     """
     human_decision = (state.get("human_decision") or "").strip().lower()
 
@@ -346,15 +460,30 @@ def spawn_workers(state: dict) -> dict:
     task_text = "\n\n".join(task_parts)
 
     results = []
-    worker_count = 0
 
     for WorkerClass in WORKER_AGENTS:
         if not _worker_matches(WorkerClass, match_text):
             continue
 
-        worker_count += 1
+        # Interactive workers are handled by the UI after the graph ends
+        if WorkerClass.interactive:
+            try:
+                WorkerClass(config)  # validate config (e.g. codebase_path)
+            except ValueError as e:
+                _log(f"[{WorkerClass.role.upper()}] Skipped — {e}")
+                continue
+
+            _log(f"[{WorkerClass.role.upper()}] Flagged for interactive session.")
+            results.append({
+                "worker":  WorkerClass.role,
+                "pending": True,
+                "task":    task_text,
+            })
+            continue
+
+        # Non-interactive workers execute inline
         _notify("agent_start", agent=WorkerClass.role, phase="implementation",
-                index=worker_count - 1, total=worker_count)
+                index=0, total=1)
 
         try:
             worker = WorkerClass(config)
@@ -379,7 +508,8 @@ def spawn_workers(state: dict) -> dict:
         "worker_results": results,
         "messages": [
             {"role": "assistant",
-             "content": f"[{r.get('worker', '?').upper()}] {r.get('summary', '')[:500]}"}
+             "content": f"[{r.get('worker', '?').upper()}] "
+                        f"{'Pending interactive session' if r.get('pending') else r.get('summary', '')[:500]}"}
             for r in results
         ],
     }
@@ -396,10 +526,25 @@ def _worker_matches(worker_cls, text: str) -> bool:
 def memory_write(state: dict) -> dict:
     """
     Flushes the completed session to SQLite and embeds key decisions
-    into ChromaDB for future semantic retrieval. Runs silently.
+    into ChromaDB for future semantic retrieval. Then checks if the
+    knowledge indexer should run to update the distilled knowledge doc.
     """
     write_session_to_db(state)
     _log("[MEMORY] Session written to SQLite and ChromaDB.")
+
+    # Check if the indexer should run
+    company_id = state.get("company_id", "")
+    config = state.get("company_config", {})
+    if company_id and config:
+        from core.memory.indexer import should_reindex, run_indexer
+        if should_reindex(company_id, config):
+            _log("[INDEXER] Threshold reached — rebuilding knowledge document...")
+            try:
+                run_indexer(company_id)
+                _log("[INDEXER] Knowledge document updated.")
+            except Exception as e:
+                _log(f"[INDEXER] Failed (non-fatal): {e}")
+
     return {}
 
 
@@ -422,11 +567,25 @@ def _build_agent_briefing(
     ]
 
     if state.get("relevant_memories"):
-        mem_text = "\n".join(
-            f"- {m['task']}: {m['outcome']}"
-            for m in state["relevant_memories"]
-        )
-        parts.append(f"Relevant past decisions:\n{mem_text}")
+        # Distilled knowledge doc gets injected as-is (it's already structured)
+        distilled = [m for m in state["relevant_memories"]
+                     if m.get("source") == "distilled_knowledge"]
+        other = [m for m in state["relevant_memories"]
+                 if m.get("source") != "distilled_knowledge"]
+
+        if distilled:
+            parts.append(
+                "COMPANY INSTITUTIONAL KNOWLEDGE:\n"
+                + distilled[0].get("reasoning", "")
+            )
+
+        if other:
+            mem_text = "\n".join(
+                f"- {m['task']}: {m['outcome']}"
+                for m in other if m.get("task")
+            )
+            if mem_text:
+                parts.append(f"Recent decisions (since last knowledge update):\n{mem_text}")
 
     # Surface any prior owner decisions from this session so agents
     # do not re-litigate points the owner has already settled.

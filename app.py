@@ -96,6 +96,9 @@ async def on_message(message: cl.Message):
     elif phase == "awaiting_decision":
         await _resume_with_decision(message.content)
 
+    elif phase == "cca_session":
+        await _continue_cca_session(message.content)
+
     elif phase == "running":
         await cl.Message(
             content="Deliberation in progress. Please wait for it to finish."
@@ -492,9 +495,7 @@ async def _resume_with_decision(human_input: str):
 
         is_implement = human_input.strip().lower().startswith("implement")
         if is_implement:
-            await cl.Message(
-                content="**Dispatching workers...**"
-            ).send()
+            await cl.Message(content="**Dispatching workers...**").send()
 
         final_states = []
 
@@ -511,60 +512,171 @@ async def _resume_with_decision(human_input: str):
 
         try:
             await asyncio.get_running_loop().run_in_executor(None, _resume)
-
-            # Show worker results if any workers ran
-            final_state = final_states[-1] if final_states else {}
-            worker_results = final_state.get("worker_results", [])
-
-            if worker_results:
-                for r in worker_results:
-                    worker_name = r.get("worker", "unknown").upper()
-                    success = r.get("success", False)
-                    summary = r.get("summary", "")
-                    files = r.get("files_changed", [])
-
-                    status = "completed" if success else "failed"
-                    parts = [f"### {worker_name} — {status}\n"]
-
-                    if summary:
-                        parts.append(summary[:1000])
-                    if files:
-                        parts.append(
-                            "\n**Files changed:**\n"
-                            + "\n".join(f"- `{f}`" for f in files)
-                        )
-                    if not success:
-                        error = r.get("output", "")
-                        if error:
-                            parts.append(f"\n**Output:**\n```\n{error[:500]}\n```")
-
-                    await cl.Message(
-                        content="\n".join(parts), author=worker_name
-                    ).send()
-            elif is_implement:
-                await cl.Message(
-                    content="No matching workers found for this task. "
-                            "Decision recorded without implementation."
-                ).send()
-
-            await cl.Message(
-                content="Session complete. Decision written to memory."
-            ).send()
         except Exception as e:
             await cl.Message(content=f"Error: {e}").send()
 
-        # Clean up checkpointer context
-        ctx = cl.user_session.get("checkpointer_ctx")
-        if ctx:
-            try:
-                ctx.__exit__(None, None, None)
-            except Exception:
-                pass
+        final_state = final_states[-1] if final_states else {}
+        worker_results = final_state.get("worker_results", [])
 
-        # Ready for next task
-        cl.user_session.set("phase", "awaiting_task")
+        # Show results from non-interactive workers
+        for r in worker_results:
+            if r.get("pending"):
+                continue
+            worker_name = r.get("worker", "unknown").upper()
+            success = r.get("success", False)
+            summary = r.get("summary", "")
+            files = r.get("files_changed", [])
+            status = "completed" if success else "failed"
+            parts = [f"### {worker_name} — {status}\n"]
+            if summary:
+                parts.append(summary[:1000])
+            if files:
+                parts.append(
+                    "\n**Files changed:**\n"
+                    + "\n".join(f"- `{f}`" for f in files)
+                )
+            await cl.Message(
+                content="\n".join(parts), author=worker_name
+            ).send()
+
+        # Check for pending interactive workers (CCA)
+        pending = [r for r in worker_results if r.get("pending")]
+        if pending:
+            # Start interactive CCA session
+            cca_pending = next(
+                (r for r in pending if r["worker"] == "cca"), None
+            )
+            if cca_pending:
+                await _start_cca_session(
+                    cca_pending["task"],
+                    final_state.get("company_config", {}),
+                )
+                return  # don't clean up yet — CCA session is ongoing
+
+        if is_implement and not worker_results:
+            await cl.Message(
+                content="No matching workers found for this task. "
+                        "Decision recorded without implementation."
+            ).send()
+
+        await _finalize_session()
+
+
+# ── Session cleanup ──────────────────────────────────────────────────────────
+
+async def _finalize_session():
+    """Clean up and return to awaiting_task state."""
+    ctx = cl.user_session.get("checkpointer_ctx")
+    if ctx:
+        try:
+            ctx.__exit__(None, None, None)
+        except Exception:
+            pass
+
+    cl.user_session.set("phase", "awaiting_task")
+    await cl.Message(
+        content="Session complete. Decision written to memory."
+    ).send()
     await cl.Message(
         content="You can submit another task or close the session."
+    ).send()
+
+
+# ── Interactive CCA session ──────────────────────────────────────────────────
+
+async def _cca_stream_callback(msg: dict):
+    """Called by CCA as each message arrives — streams to the UI in real time."""
+    msg_type = msg.get("type", "")
+    content = msg.get("content", "")
+
+    if not content:
+        return
+
+    if msg_type == "text":
+        await cl.Message(content=content, author="CCA").send()
+    elif msg_type == "tool_use":
+        await cl.Message(content=f"`{content}`", author="CCA").send()
+    elif msg_type == "result":
+        is_error = msg.get("is_error", False)
+        if is_error:
+            await cl.Message(
+                content=f"**Error:** {content}", author="CCA"
+            ).send()
+        elif content:
+            await cl.Message(content=content, author="CCA").send()
+
+
+async def _start_cca_session(task: str, company_config: dict):
+    """Start an interactive Claude Code Agent session."""
+    from core.agents.cca import CCAAgent
+
+    try:
+        agent = CCAAgent(company_config)
+    except ValueError as e:
+        await cl.Message(content=f"CCA error: {e}").send()
+        await _finalize_session()
+        return
+
+    await cl.Message(
+        content="### CCA Session Started\n\n"
+                "The Claude Code Agent is working on your task. "
+                "You'll see its progress in real time below.\n\n"
+                "When it finishes, you can send follow-up instructions "
+                "or type **done** to end the session.",
+        author="CCA",
+    ).send()
+
+    try:
+        messages, session_id = await agent.start_session(
+            task, on_message=_cca_stream_callback
+        )
+    except Exception as e:
+        await cl.Message(content=f"CCA failed to start: {e}").send()
+        await _finalize_session()
+        return
+
+    cl.user_session.set("cca_agent", agent)
+    cl.user_session.set("cca_session_id", session_id)
+    cl.user_session.set("phase", "cca_session")
+
+    await cl.Message(
+        content="---\n\n"
+                "Send follow-up instructions, or type **done** to finish.",
+    ).send()
+
+
+async def _continue_cca_session(user_input: str):
+    """Handle a message during an active CCA session."""
+    if user_input.strip().lower() == "done":
+        await cl.Message(
+            content="### CCA Session Ended", author="CCA"
+        ).send()
+        await _finalize_session()
+        return
+
+    agent = cl.user_session.get("cca_agent")
+    session_id = cl.user_session.get("cca_session_id")
+
+    if not agent or not session_id:
+        await cl.Message(content="CCA session expired. Ending.").send()
+        await _finalize_session()
+        return
+
+    try:
+        messages, new_session_id = await agent.continue_session(
+            session_id, user_input, on_message=_cca_stream_callback
+        )
+    except Exception as e:
+        await cl.Message(content=f"CCA error: {e}").send()
+        await _finalize_session()
+        return
+
+    if new_session_id:
+        cl.user_session.set("cca_session_id", new_session_id)
+
+    await cl.Message(
+        content="---\n\n"
+                "Send follow-up instructions, or type **done** to finish.",
     ).send()
 
 

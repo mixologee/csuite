@@ -1,18 +1,16 @@
 """
 core/agents/cca.py
 
-Claude Code Agent (CCA) — a worker that executes implementation tasks
-by spawning a local Claude Code subprocess backed by Ollama.
+Claude Code Agent (CCA) — an interactive worker that executes implementation
+tasks via the Claude Code Python SDK.
+
+Supports multi-turn conversations: the user can review CCA's work and
+send follow-up instructions within the same session.
 
 Required config.json field:
     codebase_path — absolute path to the codebase this company manages.
-                    If missing or empty, spawn_workers skips CCA silently.
-                    If present but not a valid directory, raises ValueError.
 """
 
-import json
-import os
-import subprocess
 from pathlib import Path
 
 from core.agents.base_worker import BaseWorker
@@ -20,9 +18,10 @@ from core.agents.base_worker import BaseWorker
 
 class CCAAgent(BaseWorker):
 
-    role  = "cca"
-    title = "Claude Code Agent"
-    keywords = [
+    role        = "cca"
+    title       = "Claude Code Agent"
+    interactive = True
+    keywords    = [
         "code", "implement", "build", "develop", "deploy", "write code",
         "create file", "set up", "configure", "install", "migrate",
         "refactor", "fix bug", "patch", "launch", "repository",
@@ -47,100 +46,158 @@ class CCAAgent(BaseWorker):
             )
 
     def execute(self, task: str) -> dict:
-        env = os.environ.copy()
-        env["ANTHROPIC_AUTH_TOKEN"] = "ollama"
-        env["ANTHROPIC_API_KEY"] = ""
-        env["ANTHROPIC_BASE_URL"] = "http://localhost:11434"
-        env["OLLAMA_CONTEXT_LENGTH"] = "65536"
-
-        cmd = [
-            "claude",
-            "--print",
-            "--output-format", "json",
-            "--model", self.model,
-            "--prompt", task,
-        ]
-
-        try:
-            result = subprocess.run(
-                cmd,
-                cwd=str(self.codebase_path),
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=600,
-            )
-
-            output = result.stdout or ""
-            stderr = result.stderr or ""
-
-            if result.returncode != 0:
-                return {
-                    "worker":        self.role,
-                    "success":       False,
-                    "summary":       f"Claude Code exited with code {result.returncode}.",
-                    "files_changed": [],
-                    "output":        f"STDOUT:\n{output}\n\nSTDERR:\n{stderr}",
-                }
-
-            return self._parse_output(output)
-
-        except subprocess.TimeoutExpired:
-            return {
-                "worker": self.role, "success": False,
-                "summary": "Claude Code timed out after 10 minutes.",
-                "files_changed": [], "output": "",
-            }
-        except FileNotFoundError:
-            return {
-                "worker": self.role, "success": False,
-                "summary": "Claude Code CLI not found. Is it installed and on PATH?",
-                "files_changed": [], "output": "",
-            }
-        except Exception as e:
-            return {
-                "worker": self.role, "success": False,
-                "summary": f"CCA execution failed: {e}",
-                "files_changed": [], "output": "",
-            }
-
-    def _parse_output(self, raw: str) -> dict:
-        result_text = ""
-        files_changed = set()
-
-        for line in raw.strip().splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                msg = json.loads(line)
-            except json.JSONDecodeError:
-                result_text += line + "\n"
-                continue
-
-            msg_type = msg.get("type", "")
-            if msg_type == "result":
-                result_text = msg.get("result", result_text)
-            elif msg_type == "assistant":
-                for block in msg.get("content", []):
-                    if isinstance(block, dict):
-                        if block.get("type") == "text":
-                            result_text = block.get("text", "")
-                        elif block.get("type") == "tool_use":
-                            inp = block.get("input", {})
-                            if isinstance(inp, dict):
-                                for key in ("file_path", "path"):
-                                    val = inp.get(key, "")
-                                    if val:
-                                        files_changed.add(str(val))
-
-        if not result_text:
-            result_text = raw[:2000] if raw else "No output captured."
-
+        """Sync fallback for non-interactive contexts (CLI runner)."""
+        import asyncio
+        messages, _ = asyncio.run(self.start_session(task))
+        result_msg = next(
+            (m for m in reversed(messages) if m["type"] == "result"), None
+        )
         return {
             "worker":        self.role,
-            "success":       True,
-            "summary":       result_text[:2000],
-            "files_changed": sorted(files_changed),
-            "output":        raw[:5000],
+            "success":       not result_msg["is_error"] if result_msg else False,
+            "summary":       result_msg["content"][:2000] if result_msg else "",
+            "files_changed": [m.get("file", "") for m in messages
+                              if m["type"] == "tool_use" and m.get("file")],
+            "output":        "\n".join(m["content"] for m in messages
+                                       if m.get("content")),
         }
+
+    def _build_options(self, resume: str | None = None):
+        from claude_code_sdk import ClaudeCodeOptions
+        opts = ClaudeCodeOptions(
+            model=self.model,
+            cwd=str(self.codebase_path),
+            permission_mode="acceptEdits",
+            max_turns=25,
+            env={
+                "ANTHROPIC_AUTH_TOKEN": "ollama",
+                "ANTHROPIC_API_KEY": "",
+                "ANTHROPIC_BASE_URL": "http://localhost:11434",
+                "OLLAMA_CONTEXT_LENGTH": "65536",
+            },
+        )
+        if resume:
+            opts.resume = resume
+        return opts
+
+    async def start_session(self, task: str,
+                             on_message=None) -> tuple[list[dict], str]:
+        """
+        Start a new CCA session.
+
+        Args:
+            task: The implementation instruction.
+            on_message: Optional async callback(msg_dict) called as each
+                        message arrives, for real-time UI streaming.
+
+        Returns (all_messages, session_id).
+        """
+        return await self._run_query(task, self._build_options(),
+                                      on_message=on_message)
+
+    async def continue_session(self, session_id: str, user_input: str,
+                                on_message=None) -> tuple[list[dict], str]:
+        """
+        Continue an existing CCA session with user follow-up.
+        Returns (all_messages, session_id).
+        """
+        return await self._run_query(
+            user_input, self._build_options(resume=session_id),
+            on_message=on_message,
+        )
+
+    @staticmethod
+    async def _run_query(prompt, options, on_message=None):
+        """
+        Run a Claude Code SDK query. Yields parsed message dicts to
+        on_message (if provided) as they arrive, and also collects
+        them into a list returned at the end.
+        """
+        from claude_code_sdk import (
+            query, ResultMessage, AssistantMessage,
+            TextBlock, ToolUseBlock,
+        )
+
+        messages = []
+        session_id = ""
+
+        try:
+            async for msg in query(prompt=prompt, options=options):
+                parsed = None
+
+                if isinstance(msg, ResultMessage):
+                    session_id = msg.session_id or session_id
+                    parsed = {
+                        "type":     "result",
+                        "content":  msg.result or "",
+                        "is_error": msg.is_error,
+                    }
+                elif isinstance(msg, AssistantMessage):
+                    if not hasattr(msg, "content"):
+                        continue
+                    for block in msg.content:
+                        if isinstance(block, TextBlock):
+                            parsed = {
+                                "type":    "text",
+                                "content": block.text,
+                            }
+                        elif isinstance(block, ToolUseBlock):
+                            name = block.name if hasattr(block, "name") else "tool"
+                            inp = block.input if hasattr(block, "input") else {}
+                            file_path = ""
+                            if isinstance(inp, dict):
+                                file_path = inp.get("file_path",
+                                                    inp.get("path", ""))
+                            parsed = {
+                                "type":    "tool_use",
+                                "tool":    name,
+                                "file":    file_path,
+                                "content": f"Using {name}"
+                                           + (f" on `{file_path}`"
+                                              if file_path else ""),
+                            }
+
+                        if parsed:
+                            messages.append(parsed)
+                            if on_message:
+                                await on_message(parsed)
+                            parsed = None
+                            continue
+
+                if parsed:
+                    messages.append(parsed)
+                    if on_message:
+                        await on_message(parsed)
+
+        except Exception as e:
+            # Ollama backend may not include all fields the SDK expects
+            # (e.g. 'signature'). If we already have messages, treat the
+            # work done so far as the result rather than crashing.
+            # Suppress the async generator cleanup noise on stderr.
+            import sys
+            _orig_unraisable = sys.unraisablehook
+            def _suppress_generator_exit(unraisable):
+                if (unraisable.exc_type is RuntimeError
+                        and "GeneratorExit" in str(unraisable.exc_value)):
+                    return
+                _orig_unraisable(unraisable)
+            sys.unraisablehook = _suppress_generator_exit
+
+            err_str = str(e)
+            if messages:
+                parsed = {
+                    "type":    "result",
+                    "content": f"Session ended early: {err_str}",
+                    "is_error": False,
+                }
+            else:
+                parsed = {
+                    "type":    "result",
+                    "content": f"CCA failed: {err_str}",
+                    "is_error": True,
+                }
+            messages.append(parsed)
+            if on_message:
+                await on_message(parsed)
+
+        return messages, session_id

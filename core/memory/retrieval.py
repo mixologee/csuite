@@ -4,14 +4,14 @@ core/memory/retrieval.py
 Memory retrieval helpers called by the memory_retrieval graph node.
 
 At the start of every session, before any agent sees the task, this module:
-  1. Queries ChromaDB for semantically similar past decisions (meaning-based)
-  2. Queries SQLite for recent sessions (recency context)
-  3. Queries SQLite for any human overrides related to this topic
-  4. Returns a combined package injected into CompanyState.relevant_memories
+  1. Loads the distilled knowledge document (knowledge.md) if it exists
+  2. Queries SQLite for decisions made since the last indexer run (gap fill)
+  3. Falls back to ChromaDB semantic search if no knowledge.md exists
+  4. Queries SQLite for any human overrides related to this topic
+  5. Returns a combined package injected into CompanyState.relevant_memories
 
-Only the CEO sees this full context. Other agents receive only what the CEO
-chooses to include in their briefing — this keeps agent prompts lean and
-prevents context window bloat on the worker tier.
+The distilled knowledge document (Karpathy-style) is the primary context
+source. ChromaDB is the fallback for companies that haven't run the indexer.
 """
 
 import sqlite3
@@ -41,21 +41,46 @@ def retrieve_relevant_memories(
 
     Each item in the returned list is a dict with keys:
         task, outcome, reasoning, human_override, source, similarity_score
+
+    If a distilled knowledge document exists, it is returned as the
+    primary memory item (source="distilled_knowledge"). ChromaDB search
+    is only used as fallback when no knowledge.md exists.
     """
+    from core.memory.indexer import load_knowledge, _load_meta
+
     memories = []
 
-    # 1. Semantic search — past decisions similar in meaning to current task
-    semantic = _semantic_search(company_id, query, top_k)
-    memories.extend(semantic)
+    # 1. Distilled knowledge document (primary — replaces ChromaDB search)
+    knowledge = load_knowledge(company_id)
+    if knowledge:
+        memories.append({
+            "task":             "",
+            "outcome":          "",
+            "reasoning":        knowledge,
+            "human_override":   "",
+            "source":           "distilled_knowledge",
+            "similarity_score": None,
+        })
 
-    # 2. Recent sessions — last N sessions for recency context
-    recent = _recent_decisions(company_id, limit=RECENT_SESSIONS)
-    for r in recent:
-        # Avoid duplicating anything already found by semantic search
-        if not any(m["task"] == r["task"] for m in memories):
-            memories.append(r)
+        # 2a. Gap fill — decisions made since the last index run
+        meta = _load_meta(company_id)
+        last_indexed_at = meta.get("last_indexed_at", "")
+        if last_indexed_at:
+            recent_since = _decisions_since(company_id, last_indexed_at)
+            for r in recent_since:
+                memories.append(r)
+    else:
+        # 2b. Fallback — ChromaDB semantic search (no knowledge.md yet)
+        semantic = _semantic_search(company_id, query, top_k)
+        memories.extend(semantic)
 
-    # 3. Human overrides — any time the human owner overruled the agents
+        # Recent sessions for recency context
+        recent = _recent_decisions(company_id, limit=RECENT_SESSIONS)
+        for r in recent:
+            if not any(m["task"] == r["task"] for m in memories):
+                memories.append(r)
+
+    # 3. Human overrides — always included (high-signal data)
     overrides = _human_overrides(company_id, limit=3)
     for o in overrides:
         if not any(m["task"] == o["task"] for m in memories):
@@ -160,6 +185,44 @@ def _recent_decisions(company_id: str, limit: int = 3) -> list[dict]:
         ]
     except Exception as e:
         print(f"[memory] SQLite recent decisions error: {e}")
+        return []
+
+
+def _decisions_since(company_id: str, since_iso: str) -> list[dict]:
+    """
+    Fetches decisions made after a given ISO timestamp.
+    Used to fill the gap between the last indexer run and now.
+    """
+    db = _db_path(company_id)
+    if not db.exists():
+        return []
+
+    try:
+        with sqlite3.connect(str(db)) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """
+                SELECT task, outcome, reasoning, human_override, decided_at
+                FROM decisions
+                WHERE outcome IS NOT NULL AND decided_at > ?
+                ORDER BY decided_at ASC
+                """,
+                (since_iso,),
+            ).fetchall()
+
+        return [
+            {
+                "task":           row["task"],
+                "outcome":        row["outcome"],
+                "reasoning":      row["reasoning"] or "",
+                "human_override": row["human_override"] or "",
+                "source":         "recent_since_index",
+                "similarity_score": None,
+            }
+            for row in rows
+        ]
+    except Exception as e:
+        print(f"[memory] SQLite decisions-since error: {e}")
         return []
 
 

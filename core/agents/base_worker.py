@@ -17,6 +17,11 @@ Every worker must implement:
         Returns at minimum: {worker, success, summary, output}
         Workers may add extra keys (e.g. files_changed for CCA).
 
+Workers may set:
+    interactive (bool) — if True, the worker manages a multi-turn session
+        with the user through the UI. The graph flags it as pending and
+        the UI layer (app.py) handles the conversation loop. Default: False.
+
 To add a new worker:
     1. Create core/agents/<name>.py with a class extending BaseWorker
     2. Add it to WORKER_AGENTS in core/agents/__init__.py
@@ -28,9 +33,10 @@ from abc import ABC, abstractmethod
 
 class BaseWorker(ABC):
 
-    role:     str
-    title:    str
-    keywords: list[str]
+    role:        str
+    title:       str
+    keywords:    list[str]
+    interactive: bool = False
 
     def __init__(self, company_config: dict):
         self.config = company_config

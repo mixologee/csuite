@@ -60,6 +60,10 @@ def scaffold_company(company_id: str, company_name: str, industry: str) -> None:
         "model_name":      "gpt-oss:20b",
         "context_length":  32768,
 
+        "indexer_model":       "",
+        "index_threshold":     5,
+        "index_version_days":  7,
+
         "risk_profile":   "moderate",
         "decision_style": "data-driven with bias toward action",
 
