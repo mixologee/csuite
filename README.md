@@ -167,7 +167,14 @@ with your reasoning. Over time this teaches the system what you actually value.
 Task arrives
     │
     ▼
-Memory retrieval (ChromaDB + SQLite)
+Memory retrieval (knowledge.md + SQLite gap-fill, ChromaDB fallback)
+    │
+    ▼
+Prior decision check
+    │
+    ├── Already decided? ──► CEO answers from knowledge ──► Human interrupt
+    │
+    └── New topic ──►
     │
     ▼
 Round 1 — Independent analysis
@@ -275,13 +282,16 @@ rather than deliberating on strategy. Each worker declares keywords that trigger
 it automatically when the task/synthesis matches.
 
 ### CCA — Claude Code Agent
-**Tier:** Worker (execution)  
+**Tier:** Worker (execution, interactive)  
 **Trigger keywords:** code, implement, build, develop, deploy, refactor, fix bug, ...  
-**What it does:** Spawns a local Claude Code subprocess pointed at the company's
-`codebase_path`. Edits files, runs commands, creates assets, reports back results.  
-**Requires:** `codebase_path` set in company config.json  
-**Safety:** Only invoked after explicit human approval (`approve` or `implement`).
-Never runs during deliberation.
+**What it does:** Connects to a local Claude Code instance via the Python SDK,
+pointed at the company's `codebase_path`. Edits files, runs commands, creates
+assets — with real-time streaming of progress to the UI. Supports multi-turn
+conversations: after CCA completes a task, you can send follow-up instructions
+within the same session. Type **done** to end the CCA session.  
+**Requires:** `codebase_path` set in company config.json, Claude Code CLI installed  
+**Safety:** Only invoked after explicit human approval (`implement`).
+`approve` finalizes without triggering workers. Never runs during deliberation.
 
 ### Adding New Agents
 
@@ -474,10 +484,20 @@ This opens a web interface at `http://localhost:8000`. The flow:
 
 1. **Select a company** from the list of configured companies
 2. **Type a task** — the question or decision for the C-suite to deliberate on
+   (if a closely matching prior decision exists, the CEO answers from memory
+   without running a full deliberation)
 3. **Watch deliberation** — each agent's output appears as a separate message,
-   with phase headers separating rounds and cross-responses
-4. **Respond** — approve, override with your reasoning, or ask for more info
-5. **Memory write** — your decision is stored, and you can submit another task
+   with a progress bar showing which agent is currently thinking
+4. **Respond** with one of four options:
+   - **approve** — accept the recommendation, write to memory, done
+   - **implement** — approve and start an interactive CCA session to execute
+     the work (edits code, creates files, etc. with real-time streaming)
+   - **override** *reason* — override with your own decision and reasoning
+   - **more info** *details* — provide new information and re-deliberate
+5. **CCA session** (if you chose implement) — watch CCA work in real time,
+   send follow-up instructions, type **done** when finished
+6. **Memory write** — your decision is stored, knowledge index updated if
+   threshold reached, and you can submit another task
 
 ### CLI (legacy)
 

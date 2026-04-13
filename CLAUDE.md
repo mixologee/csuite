@@ -51,7 +51,10 @@ to the human owner (the user). The human is always the final decision-maker.
 10. **Two agent tiers** — C-suite agents (CSUITE_AGENTS) deliberate,
     worker agents (WORKER_AGENTS) execute after human approval. Both
     registries live in `core/agents/__init__.py`. Adding a new agent =
-    create the file + add to the registry list.
+    create the file + add to the registry list. Workers with
+    `interactive = True` (like CCA) run as multi-turn sessions managed
+    by the UI layer, not inline in the graph. The user triggers workers
+    via `implement` (not `approve`).
 
 11. **Hybrid model provider** — `model_provider` and `model_name` in company
     config control which LLM backend is used. Default is Ollama with
@@ -129,7 +132,7 @@ ollama list
 - [x] core/agents/__init__.py    — Agent registries (CSUITE_AGENTS, WORKER_AGENTS)
 - [x] core/graph/session_graph.py — LangGraph graph builder + compiler
 - [x] core/graph/nodes.py         — All node functions incl. spawn_workers
-- [x] core/graph/edges.py         — conflict_router + human_decision_router
+- [x] core/graph/edges.py         — prior_decision_router + conflict_router + human_decision_router
 - [x] core/graph/runner.py        — CLI entry point
 - [x] core/memory/indexer.py       — Karpathy-style distilled knowledge indexer
 - [x] core/memory/retrieval.py    — Distilled knowledge (primary) + ChromaDB fallback
