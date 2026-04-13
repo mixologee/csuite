@@ -39,11 +39,14 @@ CSUITE_AGENTS = [CFOAgent, COOAgent, CMOAgent, CTOAgent]
 
 from core.agents.base_worker import BaseWorker
 from core.agents.cca import CCAAgent
+from core.agents.cwa import CWAAgent
+from core.agents.cra import CRAAgent
+from core.agents.csa import CSAAgent
 
 # Each entry: the worker class itself.
 # Workers declare their own keywords via the `keywords` class attribute.
 # spawn_workers matches task text against keywords to decide who runs.
-WORKER_AGENTS = [CCAAgent]
+WORKER_AGENTS = [CCAAgent, CWAAgent, CRAAgent, CSAAgent]
 
 # ── Exports ──────────────────────────────────────────────────────────────────
 
@@ -58,5 +61,8 @@ __all__ = [
     # Workers
     "BaseWorker",
     "CCAAgent",
+    "CWAAgent",
+    "CRAAgent",
+    "CSAAgent",
     "WORKER_AGENTS",
 ]
