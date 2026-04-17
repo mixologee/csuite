@@ -22,9 +22,11 @@ class CCAAgent(BaseWorker):
     title       = "Claude Code Agent"
     interactive = True
     keywords    = [
-        "code", "implement", "build", "develop", "deploy", "write code",
-        "create file", "set up", "configure", "install", "migrate",
-        "refactor", "fix bug", "patch", "launch", "repository",
+        "code", "codebase", "build app", "build page", "develop app",
+        "deploy", "write code", "create file", "configure server",
+        "install", "migrate", "refactor", "fix bug", "patch",
+        "repository", "frontend", "backend", "api", "database",
+        "script", "website", "landing page", "web page",
     ]
 
     def __init__(self, company_config: dict):

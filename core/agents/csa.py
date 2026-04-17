@@ -20,9 +20,10 @@ class CSAAgent(BaseWorker):
     title       = "Communications Agent"
     interactive = False
     keywords    = [
-        "social media", "tweet", "discord", "community", "email",
-        "campaign", "outreach", "engage", "promote", "share",
-        "announce", "notify", "communicate", "marketing",
+        "social media", "social post", "tweet", "discord",
+        "community update", "email campaign", "outreach",
+        "promote on", "share on", "post on", "post to",
+        "discord announcement", "newsletter email",
     ]
 
     def __init__(self, company_config: dict):

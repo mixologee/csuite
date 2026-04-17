@@ -67,7 +67,7 @@ async def _load_company(company_id: str):
 
     cl.user_session.set("company_id", company_id)
     cl.user_session.set("company_config", config)
-    cl.user_session.set("phase", "awaiting_task")
+    cl.user_session.set("phase", "ready")
 
     priorities = "\n".join(
         f"- {p}" for p in config.get("strategic_priorities", [])
@@ -79,7 +79,10 @@ async def _load_company(company_id: str):
             f"*{config.get('mission', '')}*\n\n"
             f"**Strategic priorities:**\n{priorities}\n\n"
             f"---\n\n"
-            f"What decision or question should the C-suite deliberate on?"
+            f"You can:\n"
+            f"- **Chat** — ask questions, get updates, discuss strategy\n"
+            f"- **Deliberate** — say \"should we...\" to get C-suite input on a decision\n"
+            f"- **Execute** — say \"implement\" or \"draft/build/research...\" to dispatch workers"
         )
     ).send()
 
@@ -90,8 +93,25 @@ async def _load_company(company_id: str):
 async def on_message(message: cl.Message):
     phase = cl.user_session.get("phase")
 
-    if phase == "awaiting_task":
-        await _run_deliberation(message.content)
+    if phase == "ready":
+        intent = _classify_intent(message.content)
+        if intent == "deliberate":
+            await _run_deliberation(message.content)
+        elif intent == "implement":
+            await _run_workers_direct(message.content)
+        else:
+            await _ceo_chat(message.content)
+
+    elif phase == "awaiting_task":
+        # Legacy — redirect to ready
+        cl.user_session.set("phase", "ready")
+        intent = _classify_intent(message.content)
+        if intent == "deliberate":
+            await _run_deliberation(message.content)
+        elif intent == "implement":
+            await _run_workers_direct(message.content)
+        else:
+            await _ceo_chat(message.content)
 
     elif phase == "awaiting_decision":
         await _resume_with_decision(message.content)
@@ -220,7 +240,7 @@ async def _run_deliberation(task: str):
             await cl.Message(
                 content=f"Deliberation failed:\n\n```\n{payload}\n```"
             ).send()
-            cl.user_session.set("phase", "awaiting_task")
+            cl.user_session.set("phase", "ready")
             await stream_future
             return
 
@@ -562,10 +582,175 @@ async def _resume_with_decision(human_input: str):
         await _finalize_session()
 
 
+# ── Intent classification ────────────────────────────────────────────────────
+
+def _classify_intent(text: str) -> str:
+    """
+    Classify user message into one of three intents:
+        "deliberate" — needs C-suite deliberation (decisions, strategy, should-we)
+        "implement"  — direct worker execution (implement X, build X, draft X)
+        "chat"       — everything else (questions, updates, conversation)
+    """
+    lower = text.strip().lower()
+
+    # Explicit implement command
+    if lower.startswith("implement"):
+        return "implement"
+
+    # Deliberation triggers — the user is asking the C-suite to weigh in
+    deliberation_phrases = [
+        "should we", "should i", "let's decide", "lets decide",
+        "deliberate on", "deliberate about", "i need a decision",
+        "what do you recommend", "weigh in on", "c-suite",
+        "evaluate whether", "assess whether", "is it worth",
+        "pros and cons", "risks of", "make a decision",
+    ]
+    if any(phrase in lower for phrase in deliberation_phrases):
+        return "deliberate"
+
+    # Direct task triggers — user wants something done, not discussed
+    task_phrases = [
+        "draft ", "write ", "create ", "build ", "research ",
+        "analyze ", "post to ", "send ", "fix ", "update ",
+        "deploy ", "set up ", "configure ",
+    ]
+    if any(lower.startswith(phrase) for phrase in task_phrases):
+        return "implement"
+
+    # Default: conversational
+    return "chat"
+
+
+# ── CEO conversational chat ─────────────────────────────────────────────────
+
+async def _ceo_chat(message: str):
+    """
+    The CEO answers conversationally from the knowledge document
+    and company context. No deliberation, no formal pipeline.
+    """
+    company_id = cl.user_session.get("company_id")
+    config = cl.user_session.get("company_config")
+
+    if not config:
+        await cl.Message(content="No company loaded. Please refresh.").send()
+        return
+
+    from core.agents.ceo import CEOAgent
+    from core.agents.base import invoke_llm
+    from core.memory.indexer import load_knowledge
+
+    ceo = CEOAgent(config)
+    knowledge = load_knowledge(company_id) if company_id else ""
+
+    prompt_parts = [
+        f"You are the CEO of {config.get('company_name', 'the company')}.",
+        f"You are having a normal conversation with the owner.",
+        f"Answer naturally and directly. You are NOT in a formal deliberation.",
+        f"Do not produce JSON. Do not recommend 'proceed/block/modify'.",
+        f"Just talk like a knowledgeable executive having a conversation.",
+    ]
+
+    if knowledge:
+        prompt_parts.append(
+            f"\nYou have access to the company's full institutional knowledge:\n"
+            f"{knowledge}"
+        )
+
+    prompt_parts.append(f"\n--- OWNER SAYS ---\n{message}")
+
+    prompt = "\n\n".join(prompt_parts)
+    response = invoke_llm(ceo.llm, prompt)
+
+    await cl.Message(content=response, author="CEO").send()
+
+
+# ── Direct worker dispatch (no deliberation) ────────────────────────────────
+
+async def _run_workers_direct(message: str):
+    """
+    Dispatch workers directly without going through deliberation.
+    Used when the user gives a direct instruction like 'implement X'
+    or 'draft a blog post about Y'.
+    """
+    from core.graph.nodes import _worker_matches
+    from core.agents import WORKER_AGENTS
+
+    config = cl.user_session.get("company_config")
+    if not config:
+        await cl.Message(content="No company loaded. Please refresh.").send()
+        return
+
+    # Strip "implement" prefix if present
+    task_text = message.strip()
+    for prefix in ("implement", "Implement", "IMPLEMENT"):
+        if task_text.startswith(prefix):
+            task_text = task_text[len(prefix):].strip()
+            break
+
+    match_text = task_text if task_text else message
+
+    # Find matching workers
+    matched = [W for W in WORKER_AGENTS if _worker_matches(W, match_text)]
+
+    if not matched:
+        # No workers match — treat as a chat message instead
+        await _ceo_chat(message)
+        return
+
+    await cl.Message(content="**Dispatching workers...**").send()
+
+    # Run non-interactive workers
+    for WorkerClass in matched:
+        if WorkerClass.interactive:
+            # Start interactive session (CCA)
+            try:
+                agent = WorkerClass(config)
+            except ValueError as e:
+                await cl.Message(
+                    content=f"{WorkerClass.role.upper()} skipped: {e}"
+                ).send()
+                continue
+            await _start_cca_session(task_text, config)
+            return  # CCA takes over the session
+
+        # Non-interactive worker
+        try:
+            worker = WorkerClass(config)
+        except ValueError as e:
+            await cl.Message(
+                content=f"{WorkerClass.role.upper()} skipped: {e}"
+            ).send()
+            continue
+
+        await cl.Message(
+            content=f"**{WorkerClass.title}** is working...",
+        ).send()
+
+        result = await asyncio.get_running_loop().run_in_executor(
+            None, worker.execute, task_text
+        )
+
+        worker_name = result.get("worker", "unknown").upper()
+        success = result.get("success", False)
+        output = result.get("output", "")
+
+        if success and output:
+            await cl.Message(content=output, author=worker_name).send()
+        elif success:
+            await cl.Message(
+                content=result.get("summary", "Done."), author=worker_name
+            ).send()
+        else:
+            await cl.Message(
+                content=f"**Failed:** {result.get('summary', 'Unknown error')}",
+                author=worker_name,
+            ).send()
+
+
 # ── Session cleanup ──────────────────────────────────────────────────────────
 
 async def _finalize_session():
-    """Clean up and return to awaiting_task state."""
+    """Clean up and return to ready state."""
     ctx = cl.user_session.get("checkpointer_ctx")
     if ctx:
         try:
@@ -573,12 +758,9 @@ async def _finalize_session():
         except Exception:
             pass
 
-    cl.user_session.set("phase", "awaiting_task")
+    cl.user_session.set("phase", "ready")
     await cl.Message(
         content="Session complete. Decision written to memory."
-    ).send()
-    await cl.Message(
-        content="You can submit another task or close the session."
     ).send()
 
 

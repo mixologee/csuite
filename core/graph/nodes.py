@@ -440,12 +440,19 @@ def spawn_workers(state: dict) -> dict:
     if not human_decision.startswith("implement"):
         return {}
 
-    # Build the text to match worker keywords against
-    match_text = " ".join([
-        state.get("current_task", ""),
-        state.get("ceo_synthesis", ""),
-        state.get("human_decision", ""),
-    ])
+    # Match keywords ONLY against the human's instruction (what they
+    # typed after "implement"), not the synthesis or original task.
+    # The synthesis contains too much noise — it mentions every topic
+    # discussed, which causes false matches.
+    human_text = (state.get("human_decision") or "").strip()
+    for prefix in ("implement", "Implement", "IMPLEMENT"):
+        if human_text.startswith(prefix):
+            human_text = human_text[len(prefix):].strip()
+            break
+
+    # If the user just typed "implement" with no details, fall back
+    # to the original task for matching.
+    match_text = human_text if human_text else state.get("current_task", "")
 
     config = state.get("company_config", {})
 
