@@ -29,9 +29,9 @@ class CFOAgent(BaseAgent):
         priorities   = config.get("strategic_priorities", [])
         constraints  = config.get("constraints", [])
         risk_profile = config.get("risk_profile", "moderate")
-        personality  = (
-            config.get("agent_personalities", {})
-                  .get("cfo", "You are a conservative, data-driven CFO.")
+        from core.config import load_agent_prompt
+        personality  = load_agent_prompt(
+            config.get("company_id", ""), "cfo", config
         )
 
         priorities_text = (

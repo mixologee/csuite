@@ -28,9 +28,9 @@ class CMOAgent(BaseAgent):
         stage       = config.get("stage", "current stage")
         priorities  = config.get("strategic_priorities", [])
         constraints = config.get("constraints", [])
-        personality = (
-            config.get("agent_personalities", {})
-                  .get("cmo", "You are a brand-conscious, customer-empathy-driven CMO.")
+        from core.config import load_agent_prompt
+        personality = load_agent_prompt(
+            config.get("company_id", ""), "cmo", config
         )
 
         priorities_text = (

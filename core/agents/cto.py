@@ -28,9 +28,9 @@ class CTOAgent(BaseAgent):
         stage       = config.get("stage", "current stage")
         priorities  = config.get("strategic_priorities", [])
         constraints = config.get("constraints", [])
-        personality = (
-            config.get("agent_personalities", {})
-                  .get("cto", "You are a pragmatic, reliability-focused CTO.")
+        from core.config import load_agent_prompt
+        personality = load_agent_prompt(
+            config.get("company_id", ""), "cto", config
         )
 
         priorities_text = (

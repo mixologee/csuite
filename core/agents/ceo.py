@@ -324,9 +324,9 @@ class CEOAgent:
         constraints  = config.get("constraints", [])
         risk_profile = config.get("risk_profile", "moderate")
         dec_style    = config.get("decision_style", "balanced")
-        personality  = (
-            config.get("agent_personalities", {})
-                  .get("ceo", "You are a decisive, synthesis-focused CEO.")
+        from core.config import load_agent_prompt
+        personality  = load_agent_prompt(
+            config.get("company_id", ""), "ceo", config
         )
 
         priorities_text = (

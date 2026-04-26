@@ -41,3 +41,26 @@ def get_tunable(company_config: dict, key: str):
     Company config values override defaults.
     """
     return company_config.get(key, DEFAULTS.get(key))
+
+
+def load_agent_prompt(company_id: str, role: str, config: dict) -> str:
+    """
+    Load an agent's personality/behavioral prompt.
+
+    Checks for a markdown file first:
+        CSUITE_COMPANY_ROOT/<company_id>/prompts/<role>.md
+
+    Falls back to the one-liner in config.json:
+        config["agent_personalities"]["<role>"]
+
+    Returns the prompt text (may be multi-paragraph markdown from .md
+    or a single sentence from config.json).
+    """
+    prompt_file = COMPANY_ROOT / company_id / "prompts" / f"{role}.md"
+    if prompt_file.exists():
+        return prompt_file.read_text(encoding="utf-8").strip()
+
+    return (
+        config.get("agent_personalities", {})
+              .get(role, f"You are the {role.upper()} of this company.")
+    )

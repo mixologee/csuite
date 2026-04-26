@@ -28,12 +28,13 @@ def scaffold_company(company_id: str, company_name: str, industry: str) -> None:
     print(f"\n  Scaffolding company: {company_name} ({company_id})\n")
 
     # ── Folder structure ──────────────────────────────────────────────────
-    ssd_path   = COMPANY_ROOT / company_id
+    ssd_path    = COMPANY_ROOT / company_id
     chroma_path = ssd_path / "chroma"
-    data_path  = DATA_ROOT / company_id
-    log_path   = LOG_ROOT / company_id / "sessions"
+    prompt_path = ssd_path / "prompts"
+    data_path   = DATA_ROOT / company_id
+    log_path    = LOG_ROOT / company_id / "sessions"
 
-    for path in [ssd_path, chroma_path, data_path, log_path]:
+    for path in [ssd_path, chroma_path, prompt_path, data_path, log_path]:
         path.mkdir(parents=True, exist_ok=True)
         print(f"  Created: {path}")
 
@@ -112,6 +113,42 @@ def scaffold_company(company_id: str, company_name: str, industry: str) -> None:
         encoding="utf-8",
     )
     print(f"  Created: {config_path}")
+
+    # ── Agent prompt files ────────────────────────────────────────────────
+    default_prompts = {
+        "ceo": (
+            f"You are a decisive, synthesis-focused CEO for {company_name}.\n\n"
+            f"Edit this file to define the CEO's full personality, thinking style,\n"
+            f"priorities, and behavioral rules. This prompt is injected into the\n"
+            f"CEO's system prompt for every session.\n\n"
+            f"See the Janky Games prompts for examples of detailed agent prompts."
+        ),
+        "cfo": (
+            f"You are a data-driven CFO for {company_name}.\n\n"
+            f"Edit this file to define the CFO's financial lens, risk tolerance,\n"
+            f"and decision-making style."
+        ),
+        "coo": (
+            f"You are an execution-focused COO for {company_name}.\n\n"
+            f"Edit this file to define the COO's operational priorities,\n"
+            f"capacity awareness, and process preferences."
+        ),
+        "cmo": (
+            f"You are a customer-focused CMO for {company_name}.\n\n"
+            f"Edit this file to define the CMO's brand voice, market awareness,\n"
+            f"and growth strategy."
+        ),
+        "cto": (
+            f"You are a pragmatic CTO for {company_name}.\n\n"
+            f"Edit this file to define the CTO's technical standards, architecture\n"
+            f"preferences, and build-vs-buy philosophy."
+        ),
+    }
+    for role, content in default_prompts.items():
+        prompt_file = prompt_path / f"{role}.md"
+        if not prompt_file.exists():
+            prompt_file.write_text(content, encoding="utf-8")
+    print(f"  Created: {prompt_path}/*.md (5 agent prompts)")
 
     # ── SQLite database ────────────────────────────────────────────────────
     db_path = data_path / f"{company_id}.db"

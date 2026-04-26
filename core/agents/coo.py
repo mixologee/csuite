@@ -27,9 +27,9 @@ class COOAgent(BaseAgent):
         stage       = config.get("stage", "current stage")
         priorities  = config.get("strategic_priorities", [])
         constraints = config.get("constraints", [])
-        personality = (
-            config.get("agent_personalities", {})
-                  .get("coo", "You are a process-oriented, execution-focused COO.")
+        from core.config import load_agent_prompt
+        personality = load_agent_prompt(
+            config.get("company_id", ""), "coo", config
         )
 
         priorities_text = (
