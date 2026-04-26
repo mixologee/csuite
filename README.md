@@ -31,17 +31,25 @@ inference, Anthropic API as an option) configurable per company.
 
 ## System Overview
 
-You interact with a **CEO agent** that manages a team of four executive agents
-(CFO, COO, CMO, CTO). When you bring a task or decision to a company:
+You interact with a **CEO agent** that manages a team of executive agents
+(CFO, COO, CMO, CTO — extensible). The system supports three modes:
 
+**Chat** — Talk naturally with the CEO. Ask questions, get status updates,
+discuss strategy. The CEO answers from the company's institutional knowledge
+document without running a formal deliberation.
+
+**Deliberate** — Say "should we..." to trigger a full C-suite deliberation:
 1. All C-suite agents independently analyze the task
-2. Agents read each other's positions and respond directly (the debate round)
+2. Agents read each other's positions and debate (cross-response round)
 3. The CEO synthesizes all outputs into a recommendation
-4. If agents are deadlocked, the CEO forces a second round with explicit conflict framing
-5. The CEO presents you the full deliberation — every agent's reasoning in detail
-6. You approve, override, or provide new information for reconsideration
-7. If approved, matching worker agents execute implementation tasks (e.g. CCA writes code)
-8. Everything is written to memory for future context
+4. If deadlocked, a second round with explicit conflict framing
+5. You approve, override, or provide new information for reconsideration
+
+**Execute** — Say "implement", "draft", "build", "research", etc. to dispatch
+worker agents directly. Workers execute concrete tasks: CCA writes code,
+CWA drafts content, CRA produces research reports, CSA creates social posts.
+
+Everything is written to institutional memory for future context.
 
 The system is **repeatable** — each company is an isolated instance with its
 own configuration, history, and memory. Spinning up Company B costs nothing
@@ -64,8 +72,10 @@ You (final decision-maker)
         │   └── CTO Agent  (technical risk)
         │
         └── Worker Tier (execution — runs after human approval)
-            └── CCA Agent  (Claude Code Agent — edits code, runs commands)
-            └── [future: comms, research, art, etc.]
+            ├── CCA Agent  (Claude Code Agent — edits code, runs commands)
+            ├── CWA Agent  (Content Writer — blog posts, copy, docs)
+            ├── CRA Agent  (Research — competitive analysis, market research)
+            └── CSA Agent  (Communications — social media, Discord, email)
                 │
                 ▼
         Ollama Inference Server (default, configurable per company)
@@ -277,32 +287,69 @@ Flags security and reliability concerns every time, even if the room is comforta
 
 ### Worker Tier
 
-Workers sit below the C-suite. They execute concrete tasks after human approval
-rather than deliberating on strategy. Each worker declares keywords that trigger
-it automatically when the task/synthesis matches.
+Workers sit below the C-suite. They execute concrete tasks — triggered by
+keyword matching against your instruction. Interactive workers (CCA) support
+multi-turn sessions; non-interactive workers return their output directly.
 
 ### CCA — Claude Code Agent
-**Tier:** Worker (execution, interactive)  
-**Trigger keywords:** code, implement, build, develop, deploy, refactor, fix bug, ...  
+**Tier:** Worker (interactive)  
+**Trigger keywords:** code, codebase, build app, frontend, backend, api, fix bug, ...  
 **What it does:** Connects to a local Claude Code instance via the Python SDK,
 pointed at the company's `codebase_path`. Edits files, runs commands, creates
-assets — with real-time streaming of progress to the UI. Supports multi-turn
-conversations: after CCA completes a task, you can send follow-up instructions
-within the same session. Type **done** to end the CCA session.  
+assets — with real-time streaming. Supports multi-turn conversations: send
+follow-up instructions, type **done** to end the session.  
 **Requires:** `codebase_path` set in company config.json, Claude Code CLI installed  
-**Safety:** Only invoked after explicit human approval (`implement`).
-`approve` finalizes without triggering workers. Never runs during deliberation.
+
+### CWA — Content Writer Agent
+**Tier:** Worker (non-interactive)  
+**Trigger keywords:** write, draft, blog, post, copy, content, newsletter, article, ...  
+**What it does:** Drafts written content using the company's brand voice — blog
+posts, game descriptions, newsletters, press releases, documentation.  
+
+### CRA — Research Agent
+**Tier:** Worker (non-interactive)  
+**Trigger keywords:** research, analyze, competitive, market, pricing, evaluate, ...  
+**What it does:** Produces structured research reports — competitive analysis,
+market research, pricing studies, technology evaluations.  
+
+### CSA — Communications Agent
+**Tier:** Worker (non-interactive)  
+**Trigger keywords:** social media, social post, tweet, discord, post to, ...  
+**What it does:** Drafts platform-appropriate communications — social posts,
+Discord announcements, email campaigns, community updates.  
+
+### Agent Prompt System
+
+Each agent's personality and behavioral instructions are loaded from markdown
+files in the company's `prompts/` directory:
+
+```
+CSUITE_COMPANY_ROOT/<company_id>/prompts/
+    ├── ceo.md
+    ├── cfo.md
+    ├── coo.md
+    ├── cmo.md
+    └── cto.md
+```
+
+These are full behavioral prompts — not one-liners. They define thinking
+frameworks, decision-making style, communication style, and behavioral rules.
+Template prompts are included in `templates/prompts/` as a starting point.
+
+If no `.md` file exists, the system falls back to the `agent_personalities`
+field in `config.json`.
 
 ### Adding New Agents
 
 **New C-suite agent** (e.g. CISO, Chief Art Director):
 1. Create `core/agents/<role>.py` extending `BaseAgent`
 2. Import and append to `CSUITE_AGENTS` in `core/agents/__init__.py`
-3. Add personality to company `config.json`
+3. Create `prompts/<role>.md` in the company's data folder
+4. Optionally add a fallback one-liner to `agent_personalities` in `config.json`
 
-**New worker agent** (e.g. comms, research, art):
+**New worker agent** (e.g. art, data analysis):
 1. Create `core/agents/<role>.py` extending `BaseWorker`
-2. Define `role`, `title`, `keywords`, and `execute(task) -> dict`
+2. Define `role`, `title`, `keywords`, `interactive`, and `execute(task) -> dict`
 3. Import and append to `WORKER_AGENTS` in `core/agents/__init__.py`
 
 The graph picks up new agents automatically — no graph or node changes needed.
@@ -329,7 +376,10 @@ D:\csuite\
 │   │   ├── coo.py                  ← COO: operational feasibility
 │   │   ├── cmo.py                  ← CMO: market and customer impact
 │   │   ├── cto.py                  ← CTO: technical risk
-│   │   └── cca.py                  ← CCA: Claude Code Agent (worker tier)
+│   │   ├── cca.py                  ← CCA: Claude Code Agent (worker, interactive)
+│   │   ├── cwa.py                  ← CWA: Content Writer Agent (worker)
+│   │   ├── cra.py                  ← CRA: Research Agent (worker)
+│   │   └── csa.py                  ← CSA: Communications Agent (worker)
 │   │
 │   ├── graph\
 │   │   ├── __init__.py
@@ -349,7 +399,13 @@ D:\csuite\
 │       └── cca_tool.py             ← Direct invocation wrapper for CCA
 │
 ├── templates\
-│   └── example_config.json         ← Company DNA template (copy when creating)
+│   ├── example_config.json         ← Company DNA template (copy when creating)
+│   └── prompts\                    ← Starter agent prompt templates
+│       ├── ceo.md
+│       ├── cfo.md
+│       ├── coo.md
+│       ├── cmo.md
+│       └── cto.md
 │
 ├── scripts\
 │   ├── new_company.py              ← Scaffold a new company instance
@@ -369,6 +425,12 @@ G:\csuite_data\                     ← CSUITE_DATA_ROOT — SQLite databases (H
 G:\csuite_data\companies\           ← CSUITE_COMPANY_ROOT — configs + knowledge + ChromaDB
 │   └── <company_id>\
 │       ├── config.json
+│       ├── prompts\                ← agent personality prompts (markdown)
+│       │   ├── ceo.md
+│       │   ├── cfo.md
+│       │   ├── coo.md
+│       │   ├── cmo.md
+│       │   └── cto.md
 │       ├── knowledge.md            ← distilled institutional memory (auto-generated)
 │       ├── index_meta.json         ← indexer state tracking
 │       ├── knowledge_versions\     ← timestamped snapshots
@@ -459,12 +521,15 @@ python scripts/new_company.py --id acme_corp --name "Acme Corp" --industry "B2B 
 
 This creates:
 - `CSUITE_COMPANY_ROOT/acme_corp/config.json` — edit this to define the company
+- `CSUITE_COMPANY_ROOT/acme_corp/prompts/*.md` — agent personality prompts (edit these)
 - `CSUITE_COMPANY_ROOT/acme_corp/chroma/` — ChromaDB vector store (starts empty)
 - `CSUITE_DATA_ROOT/acme_corp/acme_corp.db` — SQLite database with schema initialized
 - `CSUITE_LOG_ROOT/acme_corp/sessions/` — log directory
 
-**Then edit `config.json`** to set the company's mission, strategic priorities,
-constraints, risk profile, escalation rules, and agent personalities.
+**Then:**
+1. Edit `config.json` to set mission, priorities, constraints, and escalation rules
+2. Edit `prompts/*.md` to customize each agent's personality, thinking frameworks,
+   and behavioral rules (see `templates/prompts/` for the starter format)
 
 ---
 
@@ -480,24 +545,39 @@ cd D:\csuite
 chainlit run app.py
 ```
 
-This opens a web interface at `http://localhost:8000`. The flow:
+This opens a web interface at `http://localhost:8000`. After selecting a
+company, you can interact in three modes:
 
-1. **Select a company** from the list of configured companies
-2. **Type a task** — the question or decision for the C-suite to deliberate on
-   (if a closely matching prior decision exists, the CEO answers from memory
-   without running a full deliberation)
-3. **Watch deliberation** — each agent's output appears as a separate message,
-   with a progress bar showing which agent is currently thinking
-4. **Respond** with one of four options:
-   - **approve** — accept the recommendation, write to memory, done
-   - **implement** — approve and start an interactive CCA session to execute
-     the work (edits code, creates files, etc. with real-time streaming)
-   - **override** *reason* — override with your own decision and reasoning
-   - **more info** *details* — provide new information and re-deliberate
-5. **CCA session** (if you chose implement) — watch CCA work in real time,
-   send follow-up instructions, type **done** when finished
-6. **Memory write** — your decision is stored, knowledge index updated if
-   threshold reached, and you can submit another task
+**Chat mode** (default) — talk naturally with the CEO:
+- "What did we decide about the dice roller?"
+- "How are things going?"
+- "Remind me about our monetization plan"
+
+The CEO answers from the company's distilled knowledge document with
+streaming output — responses appear word by word as they generate.
+
+**Deliberation mode** — triggered by decision-oriented phrases:
+- "Should we launch a mobile app?"
+- "Let's decide on pricing"
+
+The full C-suite deliberates. After the recommendation, respond with:
+- **approve** — accept and write to memory
+- **implement** — approve and dispatch workers to execute
+- **override** *reason* — override with your decision
+- **more info** *details* — re-deliberate with new context
+
+**Execute mode** — triggered by action phrases or "implement":
+- "Draft a blog post about the dice roller"
+- "Research competitive pricing for tabletop RPGs"
+- "Build a landing page" → starts interactive CCA session
+- Or say "do it" / "go ahead" after discussing a task in chat
+
+Workers are dispatched automatically by keyword matching. Non-interactive
+workers (CWA, CRA, CSA) stream their output in real time. Interactive
+workers (CCA) start a multi-turn session — type **done** to end it.
+
+The system uses LLM-powered intent classification with conversation context,
+so it understands "sounds good, make it happen" after discussing a feature.
 
 ### CLI (legacy)
 
@@ -543,7 +623,13 @@ python -m core.graph.runner `
 | `index_threshold` | int | Re-index after this many new decisions. Default: 5. |
 | `index_version_days` | int | Save versioned knowledge snapshot every N days. Default: 7. |
 | `codebase_path` | string | Absolute path to the codebase this company manages. Required for CCA worker. |
-| `agent_personalities.*` | string | Per-agent behavioral description. Injected into each agent's system prompt. |
+| `chat_history_length` | int | Max messages kept in conversation history. Default: 20. |
+| `chat_message_cap` | int | Max chars per message included in context. Default: 10000. |
+| `cca_max_turns` | int | Max Claude Code SDK turns per CCA session. Default: 50. |
+| `worker_max_tokens` | int | Max output tokens for non-interactive workers. Default: 4096. |
+| `ceo_chat_max_tokens` | int | Max output tokens for CEO chat replies. Default: 2048. |
+| `knowledge_max_pct` | int | Max % of context_length for knowledge.md. Default: 50. |
+| `agent_personalities.*` | string | Per-agent fallback personality. Used only if no `prompts/<role>.md` file exists. |
 
 ---
 
