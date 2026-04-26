@@ -93,19 +93,23 @@ async def _load_company(company_id: str):
 async def on_message(message: cl.Message):
     phase = cl.user_session.get("phase")
 
-    if phase == "ready":
-        intent = _classify_intent(message.content)
-        if intent == "deliberate":
-            await _run_deliberation(message.content)
-        elif intent == "implement":
-            await _run_workers_direct(message.content)
-        else:
-            await _ceo_chat(message.content)
+    if phase in ("ready", "awaiting_task"):
+        if phase == "awaiting_task":
+            cl.user_session.set("phase", "ready")
 
-    elif phase == "awaiting_task":
-        # Legacy — redirect to ready
-        cl.user_session.set("phase", "ready")
+        # Track conversation history for context
+        chat_history = cl.user_session.get("chat_history") or []
+        chat_history.append({"role": "user", "content": message.content})
+        # Keep last 10 exchanges
+        if len(chat_history) > 20:
+            chat_history = chat_history[-20:]
+        cl.user_session.set("chat_history", chat_history)
+
+        # Fast-path keyword check, then LLM fallback
         intent = _classify_intent(message.content)
+        if intent is None:
+            intent = await _classify_intent_full(message.content, chat_history)
+
         if intent == "deliberate":
             await _run_deliberation(message.content)
         elif intent == "implement":
@@ -590,34 +594,72 @@ def _classify_intent(text: str) -> str:
         "deliberate" — needs C-suite deliberation (decisions, strategy, should-we)
         "implement"  — direct worker execution (implement X, build X, draft X)
         "chat"       — everything else (questions, updates, conversation)
+
+    Uses keyword matching as a fast path for obvious cases, then falls
+    back to LLM classification for ambiguous messages.
     """
     lower = text.strip().lower()
 
-    # Explicit implement command
+    # ── Fast path: unambiguous keywords ──────────────────────────────────
     if lower.startswith("implement"):
         return "implement"
 
-    # Deliberation triggers — the user is asking the C-suite to weigh in
     deliberation_phrases = [
         "should we", "should i", "let's decide", "lets decide",
         "deliberate on", "deliberate about", "i need a decision",
-        "what do you recommend", "weigh in on", "c-suite",
-        "evaluate whether", "assess whether", "is it worth",
-        "pros and cons", "risks of", "make a decision",
+        "evaluate whether", "assess whether",
     ]
     if any(phrase in lower for phrase in deliberation_phrases):
         return "deliberate"
 
-    # Direct task triggers — user wants something done, not discussed
-    task_phrases = [
-        "draft ", "write ", "create ", "build ", "research ",
-        "analyze ", "post to ", "send ", "fix ", "update ",
-        "deploy ", "set up ", "configure ",
-    ]
-    if any(lower.startswith(phrase) for phrase in task_phrases):
-        return "implement"
+    # ── Default: ask the LLM ─────────────────────────────────────────────
+    return None  # signal to caller to use async LLM classification
 
-    # Default: conversational
+
+async def _classify_intent_full(text: str, chat_history: list) -> str:
+    """
+    LLM-powered intent classification with conversation context.
+    Called when the fast-path keyword check returns None.
+    """
+    from core.agents.base import build_llm, invoke_llm
+
+    config = cl.user_session.get("company_config") or {}
+    llm = build_llm(config, temperature=0.0, max_tokens=100)
+
+    history_text = ""
+    if chat_history and len(chat_history) > 1:
+        recent = chat_history[-6:]
+        history_text = "Recent conversation:\n" + "\n".join(
+            f"{'Owner' if m['role'] == 'user' else 'CEO'}: {m['content'][:200]}"
+            for m in recent
+        ) + "\n\n"
+
+    prompt = (
+        f"{history_text}"
+        f"The owner just said: \"{text}\"\n\n"
+        f"Based on the message and conversation context, classify the owner's "
+        f"intent as exactly one of these three categories:\n\n"
+        f"CHAT — the owner is asking a question, having a conversation, or "
+        f"requesting information. They do NOT want anything built or decided.\n\n"
+        f"DELIBERATE — the owner wants the executive team to formally evaluate "
+        f"a decision. They want pros, cons, and a recommendation.\n\n"
+        f"IMPLEMENT — the owner is giving a direct order to execute, build, "
+        f"create, write, code, or do something concrete. This includes "
+        f"phrases like 'do it', 'make it happen', 'go ahead', 'get to work', "
+        f"'start on that', or any direct instruction to produce output.\n\n"
+        f"Answer with ONLY the category name (CHAT, DELIBERATE, or IMPLEMENT):\n"
+    )
+
+    result = await asyncio.get_running_loop().run_in_executor(
+        None, invoke_llm, llm, prompt
+    )
+
+    # Parse — look for the category word anywhere in the response
+    upper = result.strip().upper()
+    if "IMPLEMENT" in upper:
+        return "implement"
+    elif "DELIBERATE" in upper:
+        return "deliberate"
     return "chat"
 
 
@@ -626,7 +668,7 @@ def _classify_intent(text: str) -> str:
 async def _ceo_chat(message: str):
     """
     The CEO answers conversationally from the knowledge document
-    and company context. No deliberation, no formal pipeline.
+    and company context. Streams tokens to the UI in real time.
     """
     company_id = cl.user_session.get("company_id")
     config = cl.user_session.get("company_config")
@@ -636,7 +678,7 @@ async def _ceo_chat(message: str):
         return
 
     from core.agents.ceo import CEOAgent
-    from core.agents.base import invoke_llm
+    from core.agents.base import stream_llm
     from core.memory.indexer import load_knowledge
 
     ceo = CEOAgent(config)
@@ -656,16 +698,48 @@ async def _ceo_chat(message: str):
             f"{knowledge}"
         )
 
+    # Include recent conversation history
+    chat_history = cl.user_session.get("chat_history") or []
+    if len(chat_history) > 1:
+        history_text = "\n".join(
+            f"{'Owner' if m['role'] == 'user' else 'CEO'}: {m['content'][:500]}"
+            for m in chat_history[:-1]  # exclude the current message
+        )
+        prompt_parts.append(f"\n--- RECENT CONVERSATION ---\n{history_text}")
+
     prompt_parts.append(f"\n--- OWNER SAYS ---\n{message}")
 
     prompt = "\n\n".join(prompt_parts)
 
-    # Run LLM call in executor to avoid blocking the event loop
-    response = await asyncio.get_running_loop().run_in_executor(
-        None, invoke_llm, ceo.llm, prompt
-    )
+    # Stream tokens to the UI as they arrive
+    msg = cl.Message(content="", author="CEO")
+    await msg.send()
 
-    await cl.Message(content=response, author="CEO").send()
+    queue: asyncio.Queue = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+    collected = []
+
+    def _stream():
+        for token in stream_llm(ceo.llm, prompt):
+            collected.append(token)
+            asyncio.run_coroutine_threadsafe(queue.put(token), loop)
+        asyncio.run_coroutine_threadsafe(queue.put(None), loop)
+
+    loop.run_in_executor(None, _stream)
+
+    while True:
+        token = await queue.get()
+        if token is None:
+            break
+        await msg.stream_token(token)
+
+    await msg.update()
+
+    # Save CEO response to chat history
+    full_response = "".join(collected)
+    chat_history = cl.user_session.get("chat_history") or []
+    chat_history.append({"role": "assistant", "content": full_response})
+    cl.user_session.set("chat_history", chat_history)
 
 
 # ── Direct worker dispatch (no deliberation) ────────────────────────────────
@@ -673,11 +747,12 @@ async def _ceo_chat(message: str):
 async def _run_workers_direct(message: str):
     """
     Dispatch workers directly without going through deliberation.
-    Used when the user gives a direct instruction like 'implement X'
-    or 'draft a blog post about Y'.
+    Used when the user gives a direct instruction like 'implement X',
+    'draft a blog post about Y', or 'do it' (with context from chat history).
     """
     from core.graph.nodes import _worker_matches
     from core.agents import WORKER_AGENTS
+    from core.agents.base import invoke_llm
 
     config = cl.user_session.get("company_config")
     if not config:
@@ -691,33 +766,96 @@ async def _run_workers_direct(message: str):
             task_text = task_text[len(prefix):].strip()
             break
 
+    # If the message is vague ("do it", "get to it", etc.), use the CEO
+    # to distill the recent conversation into a concrete task for workers
+    vague_commands = [
+        "do it", "get to it", "go ahead", "start working", "execute",
+        "make it happen", "get it done", "begin", "get started",
+        "they should be working", "work on it",
+    ]
+    is_vague = task_text.lower() in vague_commands or len(task_text.split()) <= 3
+
+    if is_vague:
+        chat_history = cl.user_session.get("chat_history") or []
+        if len(chat_history) > 1:
+            # Ask the CEO to distill the conversation into a concrete task
+            from core.agents.ceo import CEOAgent
+            ceo = CEOAgent(config)
+
+            history_text = "\n".join(
+                f"{'Owner' if m['role'] == 'user' else 'CEO'}: {m['content'][:2000]}"
+                for m in chat_history[-10:]
+            )
+
+            distill_prompt = (
+                f"The owner has been discussing a task and now wants it executed "
+                f"immediately. Based on the conversation below, write a detailed "
+                f"implementation brief that a developer can act on right now.\n\n"
+                f"Include:\n"
+                f"- Exactly what to build (features, UI, logic)\n"
+                f"- Technical requirements (languages, storage, formats)\n"
+                f"- Specific functionality to implement\n"
+                f"- File names and structure if discussed\n\n"
+                f"Do NOT ask questions. Do NOT discuss trade-offs. Do NOT suggest "
+                f"phases or alternatives. Just write the spec as if handing it to "
+                f"a developer who needs to start coding immediately.\n\n"
+                f"CONVERSATION:\n{history_text}\n\n"
+                f"OWNER JUST SAID: {message}\n\n"
+                f"IMPLEMENTATION BRIEF:"
+            )
+
+            await cl.Message(
+                content="**Understanding your request...**"
+            ).send()
+
+            task_text = await asyncio.get_running_loop().run_in_executor(
+                None, invoke_llm, ceo.llm, distill_prompt
+            )
+
+            await cl.Message(
+                content=f"**Task:** {task_text[:500]}",
+            ).send()
+
     match_text = task_text if task_text else message
 
     # Find matching workers
     matched = [W for W in WORKER_AGENTS if _worker_matches(W, match_text)]
 
     if not matched:
-        # No workers match — treat as a chat message instead
-        await _ceo_chat(message)
-        return
+        # No workers match — default to CCA if codebase_path is set,
+        # otherwise treat as chat
+        if config.get("codebase_path"):
+            from core.agents.cca import CCAAgent
+            matched = [CCAAgent]
+        else:
+            await _ceo_chat(message)
+            return
 
     await cl.Message(content="**Dispatching workers...**").send()
+
+    # If an interactive worker matched, it takes priority — run it alone.
+    # (e.g. CCA handles "build a character sheet" — CWA shouldn't also
+    # try to "write" content for the same task)
+    interactive_match = next(
+        (W for W in matched if W.interactive), None
+    )
+    if interactive_match:
+        try:
+            agent = interactive_match(config)
+        except ValueError as e:
+            await cl.Message(
+                content=f"{interactive_match.role.upper()} skipped: {e}"
+            ).send()
+        else:
+            await _start_cca_session(task_text, config)
+            return
 
     # Run non-interactive workers
     for WorkerClass in matched:
         if WorkerClass.interactive:
-            # Start interactive session (CCA)
-            try:
-                agent = WorkerClass(config)
-            except ValueError as e:
-                await cl.Message(
-                    content=f"{WorkerClass.role.upper()} skipped: {e}"
-                ).send()
-                continue
-            await _start_cca_session(task_text, config)
-            return  # CCA takes over the session
+            continue
 
-        # Non-interactive worker
+        # Non-interactive worker — stream output if possible
         try:
             worker = WorkerClass(config)
         except ValueError as e:
@@ -726,29 +864,64 @@ async def _run_workers_direct(message: str):
             ).send()
             continue
 
-        await cl.Message(
-            content=f"**{WorkerClass.title}** is working...",
-        ).send()
+        worker_name = WorkerClass.role.upper()
+        prompt = worker.build_prompt(task_text)
 
-        result = await asyncio.get_running_loop().run_in_executor(
-            None, worker.execute, task_text
-        )
+        if prompt:
+            # Stream the worker's output token by token
+            from core.agents.base import stream_llm
 
-        worker_name = result.get("worker", "unknown").upper()
-        success = result.get("success", False)
-        output = result.get("output", "")
+            msg = cl.Message(content="", author=worker_name)
+            await msg.send()
 
-        if success and output:
-            await cl.Message(content=output, author=worker_name).send()
-        elif success:
-            await cl.Message(
-                content=result.get("summary", "Done."), author=worker_name
-            ).send()
+            queue_w: asyncio.Queue = asyncio.Queue()
+            loop = asyncio.get_running_loop()
+
+            def _stream_worker():
+                try:
+                    for token in stream_llm(worker.llm, prompt):
+                        asyncio.run_coroutine_threadsafe(
+                            queue_w.put(token), loop
+                        )
+                except Exception as e:
+                    asyncio.run_coroutine_threadsafe(
+                        queue_w.put(f"\n\n**Error:** {e}"), loop
+                    )
+                asyncio.run_coroutine_threadsafe(queue_w.put(None), loop)
+
+            loop.run_in_executor(None, _stream_worker)
+
+            while True:
+                token = await queue_w.get()
+                if token is None:
+                    break
+                await msg.stream_token(token)
+
+            await msg.update()
         else:
+            # No build_prompt — fall back to non-streaming execute
             await cl.Message(
-                content=f"**Failed:** {result.get('summary', 'Unknown error')}",
-                author=worker_name,
+                content=f"**{WorkerClass.title}** is working...",
             ).send()
+
+            result = await asyncio.get_running_loop().run_in_executor(
+                None, worker.execute, task_text
+            )
+
+            success = result.get("success", False)
+            output = result.get("output", "")
+
+            if success and output:
+                await cl.Message(content=output, author=worker_name).send()
+            elif success:
+                await cl.Message(
+                    content=result.get("summary", "Done."), author=worker_name
+                ).send()
+            else:
+                await cl.Message(
+                    content=f"**Failed:** {result.get('summary', 'Unknown error')}",
+                    author=worker_name,
+                ).send()
 
 
 # ── Session cleanup ──────────────────────────────────────────────────────────

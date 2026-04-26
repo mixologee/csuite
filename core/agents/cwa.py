@@ -29,7 +29,7 @@ class CWAAgent(BaseWorker):
         self.llm = build_llm(company_config, temperature=0.8, max_tokens=4096)
         self.config = company_config
 
-    def execute(self, task: str) -> dict:
+    def build_prompt(self, task: str) -> str:
         company_name = self.config.get("company_name", "the company")
         industry = self.config.get("industry", "")
         mission = self.config.get("mission", "")
@@ -38,7 +38,7 @@ class CWAAgent(BaseWorker):
                        .get("cmo", "")
         )
 
-        prompt = (
+        return (
             f"You are a professional content writer for {company_name}, "
             f"a company in {industry}.\n\n"
             f"Company mission: {mission}\n\n"
@@ -53,8 +53,9 @@ class CWAAgent(BaseWorker):
             f"Output the content directly — no preamble or meta-commentary."
         )
 
+    def execute(self, task: str) -> dict:
         try:
-            content = invoke_llm(self.llm, prompt)
+            content = invoke_llm(self.llm, self.build_prompt(task))
             return {
                 "worker":  self.role,
                 "success": True,

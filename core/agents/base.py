@@ -110,6 +110,18 @@ def invoke_llm(llm, prompt: str) -> str:
     return str(result)
 
 
+def stream_llm(llm, prompt: str):
+    """
+    Stream the LLM response, yielding string tokens as they arrive.
+    Handles both OllamaLLM (yields str) and ChatAnthropic (yields AIMessageChunk).
+    """
+    for chunk in llm.stream(prompt):
+        if hasattr(chunk, "content"):
+            yield chunk.content
+        else:
+            yield str(chunk)
+
+
 class BaseAgent(ABC):
     """
     Abstract base for all C-suite agents.

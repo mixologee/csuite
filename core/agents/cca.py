@@ -70,7 +70,16 @@ class CCAAgent(BaseWorker):
             model=self.model,
             cwd=str(self.codebase_path),
             permission_mode="acceptEdits",
-            max_turns=25,
+            max_turns=50,
+            system_prompt=(
+                f"You are a developer working on the codebase for {self.company}. "
+                f"Your job is to IMPLEMENT — write code, create files, edit files, "
+                f"and run commands. Do NOT ask clarifying questions unless something "
+                f"is genuinely ambiguous. Do NOT present options or wait for approval. "
+                f"Just start building. Read the existing codebase first to understand "
+                f"the structure, then make the changes described in the task. "
+                f"When done, summarize what you built and what files you changed."
+            ),
             env={
                 "ANTHROPIC_AUTH_TOKEN": "ollama",
                 "ANTHROPIC_API_KEY": "",

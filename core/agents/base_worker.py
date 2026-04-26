@@ -56,6 +56,16 @@ class BaseWorker(ABC):
         Workers may add additional keys relevant to their domain.
         """
 
+    def build_prompt(self, task: str) -> str:
+        """
+        Build the prompt for this worker. Override in subclasses to
+        customize. Returns the prompt string. Used by stream_execute()
+        to stream output instead of returning it all at once.
+        Default returns empty string (subclass should override if streaming
+        is desired).
+        """
+        return ""
+
     def can_handle(self, text: str) -> bool:
         """
         Returns True if this worker's keywords match the given text.

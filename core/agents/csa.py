@@ -31,7 +31,7 @@ class CSAAgent(BaseWorker):
         self.llm = build_llm(company_config, temperature=0.8, max_tokens=3072)
         self.config = company_config
 
-    def execute(self, task: str) -> dict:
+    def build_prompt(self, task: str) -> str:
         company_name = self.config.get("company_name", "the company")
         industry = self.config.get("industry", "")
         mission = self.config.get("mission", "")
@@ -40,7 +40,7 @@ class CSAAgent(BaseWorker):
                        .get("cmo", "")
         )
 
-        prompt = (
+        return (
             f"You are a communications specialist for {company_name}, "
             f"a company in {industry}.\n\n"
             f"Company mission: {mission}\n\n"
@@ -60,8 +60,9 @@ class CSAAgent(BaseWorker):
             f"Output the content directly — ready to copy and post."
         )
 
+    def execute(self, task: str) -> dict:
         try:
-            content = invoke_llm(self.llm, prompt)
+            content = invoke_llm(self.llm, self.build_prompt(task))
             return {
                 "worker":  self.role,
                 "success": True,
