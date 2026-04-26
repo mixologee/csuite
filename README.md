@@ -461,8 +461,8 @@ operations.
 
 ## Installation
 
-See the full **Installation & Setup Guide** (`csuite_install_guide.docx`)
-for step-by-step instructions. The summary:
+See the full **[Installation & Setup Guide](INSTALL.md)** for step-by-step
+instructions including troubleshooting. The summary:
 
 **1. NVIDIA drivers**
 ```
